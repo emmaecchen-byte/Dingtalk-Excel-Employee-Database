@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.excel.template_generator import (
     MONTHLY_DAILY_START_COL,
     MONTHLY_DATA_START_ROW,
+    MONTHLY_META_ANOMALY_COL,
+    MONTHLY_META_NOTES_COL,
+    MONTHLY_META_SUPPLEMENT_COL,
+    OVERTIME_CALC_START_COL,
     OVERTIME_DATA_START_ROW,
+    OVERTIME_DAY_START_COL,
     SIGN_DATA_START_ROW,
     SIGN_DAY_COUNT,
     SIGN_DAY_START_COL,
@@ -34,10 +39,10 @@ from app.models import MonthlyAttendance
 
 logger = logging.getLogger(__name__)
 
-ANOMALY_SYMBOLS = frozenset({"×", "迟", "缺"})
+ANOMALY_SYMBOLS = frozenset({"※", "●", "缺", "×", "迟"})
 HALF_DAY_SEPARATORS = ("/", "|", "、")
 DEFAULT_TEMPLATE_PATH = (
-    Path(__file__).resolve().parents[2] / "templates" / "attendance_master_template.xlsx"
+    Path(__file__).resolve().parents[2] / "templates" / "master_template.xlsx"
 )
 
 
@@ -150,10 +155,15 @@ def _query_attendance_records(
     )
 
 
-def _count_template_employees(sign_ws) -> int:
+def _count_template_employee_slots(sign_ws) -> int:
+    """Count 上午/下午 row pairs in the sign-off sheet (including blank name slots)."""
     count = 0
     row = SIGN_DATA_START_ROW
-    while sign_ws.cell(row=row, column=2).value:
+    while True:
+        if sign_ws.cell(row=row, column=3).value != "上午":
+            break
+        if sign_ws.cell(row=row + 1, column=3).value != "下午":
+            break
         count += 1
         row += 2
     return count
@@ -166,16 +176,23 @@ def _open_workbook(
     template_path: Optional[Path],
 ):
     path = template_path or DEFAULT_TEMPLATE_PATH
+    employee_count = len(employees)
     if path.exists():
         workbook = load_workbook(path)
         if workbook.sheetnames == list(TEMPLATE_SHEETS):
             sign_ws = workbook[TEMPLATE_SHEETS[0]]
-            if _count_template_employees(sign_ws) == len(employees):
-                logger.info("Loaded master template from %s", path)
+            slot_count = _count_template_employee_slots(sign_ws)
+            if slot_count >= employee_count:
+                logger.info(
+                    "Loaded master template from %s (%s slots, %s employees)",
+                    path,
+                    slot_count,
+                    employee_count,
+                )
                 return workbook
         logger.info(
-            "Rebuilding workbook for %s employees (template mismatch or invalid sheets)",
-            len(employees),
+            "Rebuilding workbook for %s employees (template mismatch or insufficient slots)",
+            employee_count,
         )
     else:
         logger.info("Master template not found at %s; building workbook", path)
@@ -210,9 +227,9 @@ def _populate_monthly_sheet(ws, records: Sequence[MonthlyAttendance], year: int,
         ws.cell(row=row, column=3, value=employee.department or "")
         ws.cell(row=row, column=4, value=employee.employee_code or "")
         ws.cell(row=row, column=5, value=employee.position or "")
-        ws.cell(row=row, column=17, value=record.anomaly_summary or "")
-        ws.cell(row=row, column=18, value="是" if record.supplement_submitted else "否")
-        ws.cell(row=row, column=19, value=record.notes or "")
+        ws.cell(row=row, column=MONTHLY_META_ANOMALY_COL, value=record.anomaly_summary or "")
+        ws.cell(row=row, column=MONTHLY_META_SUPPLEMENT_COL, value="是" if record.supplement_submitted else "否")
+        ws.cell(row=row, column=MONTHLY_META_NOTES_COL, value=record.notes or "")
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = MONTHLY_DAILY_START_COL + day - 1
@@ -242,17 +259,17 @@ def _populate_situation_sheet(ws, records: Sequence[MonthlyAttendance], year: in
 
 
 def _populate_overtime_sheet(ws, records: Sequence[MonthlyAttendance]) -> None:
+    total_col = OVERTIME_CALC_START_COL + 3  # AM — 加班合计
     for index, record in enumerate(records):
         row = OVERTIME_DATA_START_ROW + index
         employee = record.employee
         overtime_hours = float(record.total_overtime_hours or 0)
         ws.cell(row=row, column=1, value=employee.name)
-        ws.cell(row=row, column=2, value=employee.employee_code or "")
-        ws.cell(row=row, column=3, value=employee.department or "")
-        ws.cell(row=row, column=4, value=employee.position or "")
-        ws.cell(row=row, column=5, value=overtime_hours)
-        ws.cell(row=row, column=6, value=0)
-        ws.cell(row=row, column=7, value=0)
+        ws.cell(row=row, column=2, value=employee.department or "")
+        ws.cell(row=row, column=3, value="调休")
+        if overtime_hours:
+            ws.cell(row=row, column=OVERTIME_DAY_START_COL, value=overtime_hours)
+        ws.cell(row=row, column=total_col, value=overtime_hours)
 
 
 def populate_workbook(

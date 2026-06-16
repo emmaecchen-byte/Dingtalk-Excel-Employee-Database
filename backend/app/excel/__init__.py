@@ -1,5 +1,5 @@
 from app.excel.template_generator import (
-    ATTENDANCE_SYMBOLS,
+    SIGN_LEGEND_SYMBOLS,
     TEMPLATE_SHEETS,
     build_attendance_workbook,
     generate_attendance_template,
@@ -11,7 +11,7 @@ from app.excel.attendance_export import (
 )
 
 __all__ = [
-    "ATTENDANCE_SYMBOLS",
+    "SIGN_LEGEND_SYMBOLS",
     "TEMPLATE_SHEETS",
     "AttendanceExcelError",
     "ExcelExportResult",

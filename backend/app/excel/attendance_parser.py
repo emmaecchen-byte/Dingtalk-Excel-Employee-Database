@@ -17,6 +17,10 @@ from app.excel.field_utils import normalize_value, normalize_numeric_value
 from app.excel.template_generator import (
     MONTHLY_DAILY_START_COL,
     MONTHLY_DATA_START_ROW,
+    MONTHLY_META_ANOMALY_COL,
+    MONTHLY_META_NOTES_COL,
+    MONTHLY_META_SUPPLEMENT_COL,
+    OVERTIME_CALC_START_COL,
     OVERTIME_DATA_START_ROW,
     SIGN_DAY_COUNT,
     TEMPLATE_SHEETS,
@@ -105,9 +109,9 @@ def _parse_monthly_sheet(ws, year: int, month: int) -> Tuple[Tuple[Optional[int]
             employee_code=_cell_value(row[3]) if len(row) > 3 else "",
             department=_cell_value(row[2]) if len(row) > 2 else "",
             position=_cell_value(row[4]) if len(row) > 4 else "",
-            anomaly_summary=_cell_value(row[16]) if len(row) > 16 else "",
-            supplement_submitted=_cell_value(row[17]) if len(row) > 17 else "",
-            notes=_cell_value(row[18]) if len(row) > 18 else "",
+            anomaly_summary=_cell_value(row[MONTHLY_META_ANOMALY_COL - 1]) if len(row) >= MONTHLY_META_ANOMALY_COL else "",
+            supplement_submitted=_cell_value(row[MONTHLY_META_SUPPLEMENT_COL - 1]) if len(row) >= MONTHLY_META_SUPPLEMENT_COL else "",
+            notes=_cell_value(row[MONTHLY_META_NOTES_COL - 1]) if len(row) >= MONTHLY_META_NOTES_COL else "",
         )
 
         for day in range(1, SIGN_DAY_COUNT + 1):
@@ -124,17 +128,26 @@ def _parse_monthly_sheet(ws, year: int, month: int) -> Tuple[Tuple[Optional[int]
 
 def _parse_overtime_sheet(ws) -> Dict[str, str]:
     overtime_by_name: Dict[str, str] = {}
+    total_col_index = OVERTIME_CALC_START_COL + 3 - 1  # AM
     for row in ws.iter_rows(min_row=OVERTIME_DATA_START_ROW, values_only=True):
         if not row or not row[0]:
             break
         name = str(row[0]).strip()
         if not name or name == "合计":
             break
-        total_index = 7
-        if len(row) > total_index and row[total_index] is not None:
-            overtime_by_name[name] = _numeric_cell_value(row[total_index])
-        elif len(row) > 4 and row[4] is not None:
-            overtime_by_name[name] = _numeric_cell_value(row[4])
+        if len(row) > total_col_index and row[total_col_index] is not None:
+            overtime_by_name[name] = _numeric_cell_value(row[total_col_index])
+        else:
+            daily_total = 0.0
+            for value in row[3:3 + SIGN_DAY_COUNT]:
+                if value is None or value == "":
+                    continue
+                try:
+                    daily_total += float(value)
+                except (TypeError, ValueError):
+                    pass
+            if daily_total:
+                overtime_by_name[name] = _numeric_cell_value(daily_total)
     return overtime_by_name
 
 
@@ -144,10 +157,14 @@ def parse_attendance_workbook(
     year: int,
     month: int,
 ) -> ParsedWorkbook:
-    wb = load_workbook(source, read_only=True, data_only=True)
+    try:
+        wb = load_workbook(source, read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError("Unable to open Excel file. The workbook may be corrupt or not a .xlsx file.") from exc
+
     try:
         if TEMPLATE_SHEETS[2] not in wb.sheetnames:
-            raise ValueError("Uploaded file is missing the 月度汇总 worksheet")
+            raise ValueError('Uploaded file is missing the "月度汇总" worksheet')
 
         monthly_ws = wb[TEMPLATE_SHEETS[2]]
         (inferred_year, inferred_month), employees = _parse_monthly_sheet(monthly_ws, year, month)

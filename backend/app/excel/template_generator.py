@@ -2,10 +2,10 @@
 Master attendance Excel template generator (openpyxl).
 
 Sheets:
-  1. 签字           — Daily sign-off grid with COUNTIF summary formulas
-  2. 情况说明       — Anomaly explanations (populated by backend)
-  3. 月度汇总       — Monthly summary with daily columns AJ–BN and helpers BO–BT
-  4. 加班结算加班工资 — Overtime pay calculation structure
+  1. 签字           — Daily sign-off grid with COUNTIF summary formulas (AJ–AR, AT)
+  2. 情况说明       — Anomaly explanations (populated by backend, no formulas)
+  3. 月度汇总       — Monthly summary with daily columns AJ–BN
+  4. 加班结算加班工资 — Daily overtime D–AH and rate columns AJ–AP
 """
 
 from __future__ import annotations
@@ -23,72 +23,62 @@ COMPANY_NAME = "创崎新能源技术（上海）有限公司"
 
 TEMPLATE_SHEETS = ("签字", "情况说明", "月度汇总", "加班结算加班工资")
 
-# (symbol, Chinese label)
-ATTENDANCE_SYMBOLS: Tuple[Tuple[str, str], ...] = (
-    ("√", "出勤"),
-    ("◇", "事假"),
-    ("○", "病假"),
-    ("△", "年假"),
-    ("☆", "调休"),
-    ("×", "旷工"),
-    ("迟", "迟到"),
-    ("缺", "缺卡"),
-)
+# 签字 sheet layout
+SIGN_HEADER_ROW = 3
+SIGN_DATE_ROW = 4
+SIGN_LEGEND_ROW = 5
+SIGN_DATA_START_ROW = 6
 
 SIGN_DAY_START_COL = 4  # D
+SIGN_DAY_END_COL = 34  # AH (31 days)
 SIGN_DAY_COUNT = 31
-SIGN_DATA_START_ROW = 6
-MONTHLY_DATA_START_ROW = 5
-OVERTIME_DATA_START_ROW = 4
-SITUATION_DATA_START_ROW = 2
-SIGN_SUMMARY_HEADERS: Tuple[Tuple[str, str], ...] = (
-    ("出勤天数", "√"),
-    ("事假", "◇"),
-    ("病假", "○"),
-    ("年假", "△"),
-    ("调休", "☆"),
-    ("旷工", "×"),
-    ("迟到", "迟"),
-    ("缺卡", "缺"),
+
+SIGN_SUMMARY_START_COL = 36  # AJ
+SIGN_SUMMARY_END_COL = 44  # AR
+SIGN_ABSENT_COL = 46  # AT = 应出勤 - 出勤
+
+# Legend symbols in AJ5–AS5 (symbol only in cell; label in comment / adjacent doc)
+SIGN_LEGEND_SYMBOLS: Tuple[Tuple[str, str], ...] = (
+    ("√", "出勤"),
+    ("◇", "事假"),
+    ("✬", "调休"),
+    ("▼", "出差"),
+    ("※", "病假"),
+    ("●", "福利假"),
+    ("AL", "年假"),
+    ("○", "产假/陪产假"),
+    ("FL", "丧假"),
+    ("ML", "婚假"),
 )
 
+SIGN_COUNT_SYMBOLS: Tuple[str, ...] = tuple(symbol for symbol, _ in SIGN_LEGEND_SYMBOLS[:9])
+
+# 月度汇总
+MONTHLY_DATE_ROW = 1
+MONTHLY_SECTION_ROW = 3
+MONTHLY_HEADER_ROW = 4
+MONTHLY_DATA_START_ROW = 5
 MONTHLY_DAILY_START_COL = 36  # AJ
 MONTHLY_DAILY_END_COL = 66  # BN
-MONTHLY_HELPER_START_COL = 67  # BO
-MONTHLY_HELPER_HEADERS = ("异常汇总", "旷工次数", "迟到次数", "缺卡次数", "是否补单", "备注")
+MONTHLY_META_ANOMALY_COL = 67  # BO — backend only, no formulas
+MONTHLY_META_SUPPLEMENT_COL = 68  # BP
+MONTHLY_META_NOTES_COL = 69  # BQ
 
-MONTHLY_SUMMARY_HEADERS: Tuple[str, ...] = (
-    "应出勤天数",
-    "实际出勤天数",
-    "事假(天)",
-    "病假(天)",
-    "年假(天)",
-    "调休(天)",
-    "加班(小时)",
-    "旷工(次)",
-    "迟到(次)",
-    "缺卡(次)",
-    "出勤率",
-    "异常情况",
-    "是否补单",
-    "备注",
-    "签字表出勤",
-    "签字表事假",
-    "签字表病假",
-    "签字表年假",
-    "签字表调休",
-    "签字表旷工",
-    "签字表迟到",
-    "签字表缺卡",
-    "事假(小时)",
-    "病假(小时)",
-    "年假(小时)",
-    "调休(小时)",
-    "平日加班",
-    "周末加班",
-    "节假日加班",
-    "加班合计",
-)
+# 情况说明
+SITUATION_DATA_START_ROW = 2
+
+# 加班结算
+OVERTIME_TITLE_ROW = 1
+OVERTIME_HEADER_ROW = 4
+OVERTIME_DATA_START_ROW = 5
+OVERTIME_DAY_START_COL = 4  # D
+OVERTIME_DAY_COUNT = 31
+OVERTIME_CALC_START_COL = 36  # AJ
+
+# 1.5x / 2x / 3x overtime day column groups (within D–AH)
+OVERTIME_15X_RANGES = ("J:M", "O:S", "V:Z", "AC:AG")
+OVERTIME_2X_RANGES = ("G:I", "N:N", "T:U", "AA:AB", "AH:AI")
+OVERTIME_3X_RANGES = ("E:F",)
 
 THIN_BORDER = Border(
     left=Side(style="thin"),
@@ -102,6 +92,9 @@ HEADER_FONT = Font(name="宋体", size=10, bold=True)
 BODY_FONT = Font(name="宋体", size=10)
 CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+DEFAULT_BLANK_EMPLOYEE_SLOTS = 15
+DEFAULT_WORK_DAYS = 21
+
 
 @dataclass
 class TemplateEmployee:
@@ -110,22 +103,27 @@ class TemplateEmployee:
     position: str = ""
     employee_code: str = ""
     attendance_group: str = "默认考勤组"
+    overtime_settlement: str = "调休"
+
+
+def _col_letter(col: int) -> str:
+    return get_column_letter(col)
 
 
 def _day_col_sign(day: int) -> str:
-    return get_column_letter(SIGN_DAY_START_COL + day - 1)
+    return _col_letter(SIGN_DAY_START_COL + day - 1)
 
 
 def _summary_col_sign(index: int) -> str:
-    return get_column_letter(SIGN_DAY_START_COL + SIGN_DAY_COUNT + index)
+    return _col_letter(SIGN_SUMMARY_START_COL + index)
 
 
 def _monthly_daily_col(day: int) -> str:
-    return get_column_letter(MONTHLY_DAILY_START_COL + day - 1)
+    return _col_letter(MONTHLY_DAILY_START_COL + day - 1)
 
 
-def _monthly_helper_col(index: int) -> str:
-    return get_column_letter(MONTHLY_HELPER_START_COL + index)
+def _overtime_day_col(day: int) -> str:
+    return _col_letter(OVERTIME_DAY_START_COL + day - 1)
 
 
 def _apply_border_range(ws, min_row: int, max_row: int, min_col: int, max_col: int) -> None:
@@ -135,73 +133,80 @@ def _apply_border_range(ws, min_row: int, max_row: int, min_col: int, max_col: i
 
 
 def _merge_title(ws, row: int, min_col: int, max_col: int, text: str) -> None:
-    ws.merge_cells(
-        start_row=row,
-        start_column=min_col,
-        end_row=row,
-        end_column=max_col,
-    )
+    ws.merge_cells(start_row=row, start_column=min_col, end_row=row, end_column=max_col)
     cell = ws.cell(row=row, column=min_col, value=text)
     cell.font = TITLE_FONT
     cell.alignment = CENTER
 
 
-def _sign_countif_formula(am_row: int, pm_row: int, symbol: str, half_day: bool = False) -> str:
+def _sign_countif_formula(am_row: int, symbol: str) -> str:
     day_start = _day_col_sign(1)
     day_end = _day_col_sign(SIGN_DAY_COUNT)
-    expr = f'COUNTIF({day_start}{am_row}:{day_end}{pm_row},"{symbol}")'
-    if half_day:
-        return f"={expr}/2"
-    return f"={expr}"
+    legend_col = _summary_col_sign(SIGN_COUNT_SYMBOLS.index(symbol))
+    return f"=COUNTIF({day_start}{am_row}:{day_end}{am_row},${legend_col}$5)"
 
 
-def _build_sign_sheet(
-    ws,
-    year: int,
-    month: int,
-    employees: Sequence[TemplateEmployee],
-) -> None:
+def _overtime_sum_formula(row: int, ranges: Tuple[str, ...]) -> str:
+    parts = []
+    for rng in ranges:
+        if ":" not in rng:
+            parts.append(f"{rng}{row}")
+            continue
+        start, end = rng.split(":", 1)
+        if start == end:
+            parts.append(f"{start}{row}")
+        else:
+            parts.append(f"{start}{row}:{end}{row}")
+    return f"=SUM({','.join(parts)})"
+
+
+def _blank_employees(count: int) -> Tuple[TemplateEmployee, ...]:
+    return tuple(TemplateEmployee(name="") for _ in range(count))
+
+
+def _resolve_employees(employees: Optional[Sequence[TemplateEmployee]]) -> Sequence[TemplateEmployee]:
+    if not employees:
+        return _blank_employees(DEFAULT_BLANK_EMPLOYEE_SLOTS)
+    if len(employees) < DEFAULT_BLANK_EMPLOYEE_SLOTS:
+        return tuple(employees) + _blank_employees(DEFAULT_BLANK_EMPLOYEE_SLOTS - len(employees))
+    return employees
+
+
+def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmployee]) -> None:
     days_in_month = calendar.monthrange(year, month)[1]
-    last_summary_col = SIGN_DAY_START_COL + SIGN_DAY_COUNT + len(SIGN_SUMMARY_HEADERS) - 1
+    last_col = max(SIGN_ABSENT_COL, SIGN_SUMMARY_END_COL + 6)
 
-    _merge_title(
-        ws,
-        1,
-        1,
-        last_summary_col,
-        f"{COMPANY_NAME}员工{year}年{month}月考勤表",
-    )
-
+    _merge_title(ws, 1, 1, last_col, f"{COMPANY_NAME}员工{year}年{month}月考勤表")
     ws.row_dimensions[1].height = 28
 
-    # Row 4 — column headers
-    ws.cell(row=4, column=1, value="签名").font = HEADER_FONT
-    ws.cell(row=4, column=2, value="姓名").font = HEADER_FONT
-    ws.cell(row=4, column=3, value="时间").font = HEADER_FONT
+    for col, label in ((1, "签名"), (2, "姓名"), (3, "时间")):
+        cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=label)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = CENTER
+
     for day in range(1, SIGN_DAY_COUNT + 1):
         col = SIGN_DAY_START_COL + day - 1
         value = day if day <= days_in_month else f"{day}*"
-        cell = ws.cell(row=4, column=col, value=value)
+        cell = ws.cell(row=SIGN_DATE_ROW, column=col, value=value)
         cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
         cell.alignment = CENTER
         if day > days_in_month:
             cell.font = Font(name="宋体", size=10, bold=True, color="999999")
-    for idx, (label, _) in enumerate(SIGN_SUMMARY_HEADERS):
-        col = SIGN_DAY_START_COL + SIGN_DAY_COUNT + idx
-        cell = ws.cell(row=4, column=col, value=label)
+
+    for idx, (symbol, label) in enumerate(SIGN_LEGEND_SYMBOLS):
+        col = SIGN_SUMMARY_START_COL + idx
+        cell = ws.cell(row=SIGN_LEGEND_ROW, column=col, value=symbol)
         cell.font = HEADER_FONT
         cell.alignment = CENTER
+        cell.fill = HEADER_FILL
+    absent_header = ws.cell(row=SIGN_DATE_ROW, column=SIGN_ABSENT_COL, value="缺勤")
+    absent_header.font = HEADER_FONT
+    absent_header.fill = HEADER_FILL
+    absent_header.alignment = CENTER
 
-    # Row 5 — symbol legend
-    legend_parts = [f"{symbol}={label}" for symbol, label in ATTENDANCE_SYMBOLS]
-    ws.merge_cells(start_row=5, start_column=SIGN_DAY_START_COL, end_row=5, end_column=last_summary_col)
-    legend_cell = ws.cell(row=5, column=SIGN_DAY_START_COL, value="  ".join(legend_parts))
-    legend_cell.font = Font(name="宋体", size=9)
-    legend_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    ws.row_dimensions[5].height = 22
-
-    # Employee rows — two rows per employee (上午 / 下午)
-    current_row = 6
+    current_row = SIGN_DATA_START_ROW
     for employee in employees:
         am_row = current_row
         pm_row = current_row + 1
@@ -210,7 +215,7 @@ def _build_sign_sheet(
         ws.cell(row=am_row, column=1).alignment = CENTER
 
         ws.merge_cells(start_row=am_row, start_column=2, end_row=pm_row, end_column=2)
-        name_cell = ws.cell(row=am_row, column=2, value=employee.name)
+        name_cell = ws.cell(row=am_row, column=2, value=employee.name or None)
         name_cell.font = BODY_FONT
         name_cell.alignment = CENTER
 
@@ -220,29 +225,31 @@ def _build_sign_sheet(
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
             if day > days_in_month:
-                for r in (am_row, pm_row):
-                    cell = ws.cell(row=r, column=col, value="")
-                    cell.fill = PatternFill("solid", fgColor="F2F2F2")
+                for row in (am_row, pm_row):
+                    ws.cell(row=row, column=col, value="")
+                    ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F2F2F2")
             else:
                 ws.cell(row=am_row, column=col, value="")
                 ws.cell(row=pm_row, column=col, value="")
 
-        for idx, (_, symbol) in enumerate(SIGN_SUMMARY_HEADERS):
-            col = SIGN_DAY_START_COL + SIGN_DAY_COUNT + idx
-            half_day = symbol == "√"
-            formula = _sign_countif_formula(am_row, pm_row, symbol, half_day=half_day)
-            summary_cell = ws.cell(row=am_row, column=col, value=formula)
-            summary_cell.alignment = CENTER
-            ws.merge_cells(start_row=am_row, start_column=col, end_row=pm_row, end_column=col)
+        for idx, symbol in enumerate(SIGN_COUNT_SYMBOLS):
+            col = SIGN_SUMMARY_START_COL + idx
+            ws.cell(row=am_row, column=col, value=_sign_countif_formula(am_row, symbol))
             ws.cell(row=am_row, column=col).alignment = CENTER
+
+        aj_col = _summary_col_sign(0)
+        ws.cell(row=am_row, column=SIGN_ABSENT_COL, value=f"={DEFAULT_WORK_DAYS}-{aj_col}{am_row}")
+        ws.cell(row=am_row, column=SIGN_ABSENT_COL).alignment = CENTER
 
         current_row += 2
 
-    last_data_row = current_row - 1
-    _apply_border_range(ws, 4, last_data_row, 1, last_summary_col)
-    for col in range(1, last_summary_col + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 4 if col >= SIGN_DAY_START_COL else 10
+    last_data_row = max(current_row - 1, SIGN_LEGEND_ROW)
+    _apply_border_range(ws, SIGN_HEADER_ROW, last_data_row, 1, SIGN_ABSENT_COL)
+    ws.column_dimensions["A"].width = 8
     ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 8
+    for col in range(SIGN_DAY_START_COL, SIGN_ABSENT_COL + 1):
+        ws.column_dimensions[_col_letter(col)].width = 4
 
 
 def _build_situation_sheet(ws) -> None:
@@ -253,9 +260,9 @@ def _build_situation_sheet(ws) -> None:
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
         cell.border = THIN_BORDER
-        ws.column_dimensions[get_column_letter(idx)].width = 18 if idx == 3 else 14
+        ws.column_dimensions[_col_letter(idx)].width = 18 if idx == 3 else 14
 
-    for row in range(2, 52):
+    for row in range(SITUATION_DATA_START_ROW, SITUATION_DATA_START_ROW + 50):
         for col in range(1, len(headers) + 1):
             ws.cell(row=row, column=col, value="")
             ws.cell(row=row, column=col).border = THIN_BORDER
@@ -268,137 +275,66 @@ def _build_monthly_summary_sheet(
     employees: Sequence[TemplateEmployee],
 ) -> None:
     days_in_month = calendar.monthrange(year, month)[1]
-    daily_start = get_column_letter(MONTHLY_DAILY_START_COL)
-    daily_end = get_column_letter(MONTHLY_DAILY_END_COL)
-    helper_end = get_column_letter(MONTHLY_HELPER_START_COL + len(MONTHLY_HELPER_HEADERS) - 1)
+    last_col = MONTHLY_META_NOTES_COL
 
-    _merge_title(ws, 1, 1, MONTHLY_HELPER_START_COL + len(MONTHLY_HELPER_HEADERS) - 1, f"{COMPANY_NAME}")
-    _merge_title(ws, 2, 1, MONTHLY_HELPER_START_COL + len(MONTHLY_HELPER_HEADERS) - 1, f"{year}年{month}月考勤月度汇总")
+    _merge_title(ws, 2, 1, MONTHLY_DAILY_START_COL - 1, f"{COMPANY_NAME}{year}年{month}月考勤月度汇总")
 
-    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=5)
-    ws.cell(row=3, column=1, value="员工信息").font = HEADER_FONT
-    ws.cell(row=3, column=1).alignment = CENTER
-    ws.cell(row=3, column=1).fill = HEADER_FILL
+    for day in range(1, SIGN_DAY_COUNT + 1):
+        col = MONTHLY_DAILY_START_COL + day - 1
+        value = day if day <= days_in_month else f"{day}*"
+        cell = ws.cell(row=MONTHLY_DATE_ROW, column=col, value=value)
+        cell.font = HEADER_FONT
+        cell.alignment = CENTER
+        cell.fill = HEADER_FILL
+        if day > days_in_month:
+            cell.font = Font(name="宋体", size=10, bold=True, color="999999")
 
-    summary_end_col = MONTHLY_DAILY_START_COL - 1
-    ws.merge_cells(start_row=3, start_column=6, end_row=3, end_column=summary_end_col)
-    ws.cell(row=3, column=6, value="月度统计").font = HEADER_FONT
-    ws.cell(row=3, column=6).alignment = CENTER
-    ws.cell(row=3, column=6).fill = HEADER_FILL
+    ws.merge_cells(start_row=MONTHLY_SECTION_ROW, start_column=1, end_row=MONTHLY_SECTION_ROW, end_column=5)
+    section = ws.cell(row=MONTHLY_SECTION_ROW, column=1, value="员工信息")
+    section.font = HEADER_FONT
+    section.fill = HEADER_FILL
+    section.alignment = CENTER
 
-    ws.merge_cells(start_row=3, start_column=MONTHLY_DAILY_START_COL, end_row=3, end_column=MONTHLY_DAILY_END_COL)
-    ws.cell(row=3, column=MONTHLY_DAILY_START_COL, value="每日考勤状态").font = HEADER_FONT
-    ws.cell(row=3, column=MONTHLY_DAILY_START_COL).alignment = CENTER
-    ws.cell(row=3, column=MONTHLY_DAILY_START_COL).fill = HEADER_FILL
+    ws.merge_cells(
+        start_row=MONTHLY_SECTION_ROW,
+        start_column=MONTHLY_DAILY_START_COL,
+        end_row=MONTHLY_SECTION_ROW,
+        end_column=MONTHLY_DAILY_END_COL,
+    )
+    daily_section = ws.cell(row=MONTHLY_SECTION_ROW, column=MONTHLY_DAILY_START_COL, value="每日考勤状态")
+    daily_section.font = HEADER_FONT
+    daily_section.fill = HEADER_FILL
+    daily_section.alignment = CENTER
 
-    helper_end_col = MONTHLY_HELPER_START_COL + len(MONTHLY_HELPER_HEADERS) - 1
-    ws.merge_cells(start_row=3, start_column=MONTHLY_HELPER_START_COL, end_row=3, end_column=helper_end_col)
-    ws.cell(row=3, column=MONTHLY_HELPER_START_COL, value="辅助计算列").font = HEADER_FONT
-    ws.cell(row=3, column=MONTHLY_HELPER_START_COL).alignment = CENTER
-    ws.cell(row=3, column=MONTHLY_HELPER_START_COL).fill = HEADER_FILL
-
-    # Row 4 — column headers
     base_headers = ("姓名", "考勤组", "部门", "工号", "职位")
     for idx, header in enumerate(base_headers, start=1):
-        cell = ws.cell(row=4, column=idx, value=header)
-        cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL
-        cell.alignment = CENTER
-
-    for idx, header in enumerate(MONTHLY_SUMMARY_HEADERS, start=6):
-        cell = ws.cell(row=4, column=idx, value=header)
+        cell = ws.cell(row=MONTHLY_HEADER_ROW, column=idx, value=header)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
 
     for day in range(1, SIGN_DAY_COUNT + 1):
         col = MONTHLY_DAILY_START_COL + day - 1
-        value = day if day <= days_in_month else f"{day}*"
-        cell = ws.cell(row=4, column=col, value=value)
+        cell = ws.cell(row=MONTHLY_HEADER_ROW, column=col, value=day if day <= days_in_month else f"{day}*")
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
 
-    for idx, header in enumerate(MONTHLY_HELPER_HEADERS):
-        col = MONTHLY_HELPER_START_COL + idx
-        cell = ws.cell(row=4, column=col, value=header)
-        cell.font = HEADER_FONT
+    meta_headers = ((MONTHLY_META_ANOMALY_COL, "异常汇总"), (MONTHLY_META_SUPPLEMENT_COL, "是否补单"), (MONTHLY_META_NOTES_COL, "备注"))
+    for col, label in meta_headers:
+        cell = ws.cell(row=MONTHLY_HEADER_ROW, column=col, value=label)
+        cell.font = Font(name="宋体", size=9, bold=True, color="666666")
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
 
-    data_start_row = 5
     for offset, employee in enumerate(employees):
-        row = data_start_row + offset
-        sign_am_row = 6 + offset * 2
-        sign_pm_row = sign_am_row + 1
-
-        ws.cell(row=row, column=1, value=employee.name)
+        row = MONTHLY_DATA_START_ROW + offset
+        ws.cell(row=row, column=1, value=employee.name or None)
         ws.cell(row=row, column=2, value=employee.attendance_group)
         ws.cell(row=row, column=3, value=employee.department)
         ws.cell(row=row, column=4, value=employee.employee_code)
         ws.cell(row=row, column=5, value=employee.position)
 
-        # F: 应出勤天数 (weekdays in month, simplified as days_in_month for template)
-        ws.cell(row=row, column=6, value=days_in_month)
-        # G: 实际出勤天数 — COUNT √ in daily columns (each = 1 day if both halves present)
-        ws.cell(
-            row=row,
-            column=7,
-            value=f'=COUNTIF({daily_start}{row}:{daily_end}{row},"√")',
-        )
-        # H–K: leave days from daily symbols
-        leave_map = (
-            (8, "◇"),
-            (9, "○"),
-            (10, "△"),
-            (11, "☆"),
-        )
-        for col, symbol in leave_map:
-            ws.cell(
-                row=row,
-                column=col,
-                value=f'=COUNTIF({daily_start}{row}:{daily_end}{row},"{symbol}")/2',
-            )
-        # L: overtime hours — link to overtime sheet column H
-        overtime_row = row
-        ws.cell(row=row, column=12, value=f"='加班结算加班工资'!H{overtime_row}")
-        # M–O: anomaly counts
-        ws.cell(row=row, column=13, value=f'=COUNTIF({daily_start}{row}:{daily_end}{row},"×")')
-        ws.cell(row=row, column=14, value=f'=COUNTIF({daily_start}{row}:{daily_end}{row},"迟")')
-        ws.cell(row=row, column=15, value=f'=COUNTIF({daily_start}{row}:{daily_end}{row},"缺")')
-        # P: attendance rate
-        ws.cell(row=row, column=16, value=f"=IF(F{row}=0,0,G{row}/F{row})")
-        ws.cell(row=row, column=16).number_format = "0.0%"
-        # Q–R: pulled from 情况说明 (placeholder INDEX; backend fills or HR edits)
-        ws.cell(row=row, column=17, value="")
-        ws.cell(row=row, column=18, value="")
-        ws.cell(row=row, column=19, value="")
-
-        # T–Z: cross-reference 签字 sheet summary columns
-        sign_refs = (
-            (20, _summary_col_sign(0)),
-            (21, _summary_col_sign(1)),
-            (22, _summary_col_sign(2)),
-            (23, _summary_col_sign(3)),
-            (24, _summary_col_sign(4)),
-            (25, _summary_col_sign(5)),
-            (26, _summary_col_sign(6)),
-            (27, _summary_col_sign(7)),
-        )
-        for col, sign_col in sign_refs:
-            ws.cell(row=row, column=col, value=f"=签字!{sign_col}{sign_am_row}")
-
-        # AA–AD: leave hours (days * 8)
-        for col, src_col in ((28, "H"), (29, "I"), (30, "J"), (31, "K")):
-            ws.cell(row=row, column=col, value=f"={src_col}{row}*8")
-
-        # AE–AH: overtime breakdown from sheet 4
-        ws.cell(row=row, column=32, value=f"='加班结算加班工资'!E{overtime_row}")
-        ws.cell(row=row, column=33, value=f"='加班结算加班工资'!F{overtime_row}")
-        ws.cell(row=row, column=34, value=f"='加班结算加班工资'!G{overtime_row}")
-        ws.cell(row=row, column=35, value=f"='加班结算加班工资'!H{overtime_row}")
-
-        # Daily columns AJ–BN (blank for backend population)
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = MONTHLY_DAILY_START_COL + day - 1
             if day > days_in_month:
@@ -407,89 +343,84 @@ def _build_monthly_summary_sheet(
             else:
                 ws.cell(row=row, column=col, value="")
 
-        # Helper columns BO–BT
-        ws.cell(
-            row=row,
-            column=MONTHLY_HELPER_START_COL,
-            value=(
-                f'=IF(M{row}+N{row}+O{row}>0,'
-                f'"旷工"&M{row}&"次 迟到"&N{row}&"次 缺卡"&O{row}&"次","正常")'
-            ),
-        )
-        ws.cell(row=row, column=MONTHLY_HELPER_START_COL + 1, value=f"=M{row}")
-        ws.cell(row=row, column=MONTHLY_HELPER_START_COL + 2, value=f"=N{row}")
-        ws.cell(row=row, column=MONTHLY_HELPER_START_COL + 3, value=f"=O{row}")
-        ws.cell(row=row, column=MONTHLY_HELPER_START_COL + 4, value=f"=R{row}")
-        ws.cell(row=row, column=MONTHLY_HELPER_START_COL + 5, value=f"=S{row}")
+        for col in (MONTHLY_META_ANOMALY_COL, MONTHLY_META_SUPPLEMENT_COL, MONTHLY_META_NOTES_COL):
+            ws.cell(row=row, column=col, value="")
 
-    last_row = data_start_row + len(employees) - 1
-    _apply_border_range(ws, 3, last_row, 1, helper_end_col)
+    last_row = MONTHLY_DATA_START_ROW + len(employees) - 1
+    _apply_border_range(ws, MONTHLY_SECTION_ROW, last_row, 1, last_col)
     ws.column_dimensions["A"].width = 12
     ws.column_dimensions["C"].width = 14
     for col in range(MONTHLY_DAILY_START_COL, MONTHLY_DAILY_END_COL + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 4
+        ws.column_dimensions[_col_letter(col)].width = 4
 
 
-def _build_overtime_sheet(
-    ws,
-    year: int,
-    month: int,
-    employees: Sequence[TemplateEmployee],
-) -> None:
-    _merge_title(ws, 1, 1, 11, f"{COMPANY_NAME}{year}年{month}月加班结算及加班工资")
+def _build_overtime_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmployee]) -> None:
+    day_end_col = OVERTIME_DAY_START_COL + OVERTIME_DAY_COUNT - 1
+    calc_end_col = OVERTIME_CALC_START_COL + 6  # AJ–AP
+    last_col = max(day_end_col, calc_end_col)
 
-    headers = (
-        "姓名",
-        "工号",
-        "部门",
-        "职位",
-        "平日加班(小时)",
-        "周末加班(小时)",
-        "节假日加班(小时)",
-        "加班总时长",
-        "加班单价(元/小时)",
-        "加班工资(元)",
-        "备注",
-    )
-    for idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=3, column=idx, value=header)
+    _merge_title(ws, OVERTIME_TITLE_ROW, 1, last_col, f"{COMPANY_NAME}{year}年{month}月加班结算及加班工资")
+
+    for col, label in ((1, "姓名"), (2, "部门"), (3, "加班兑换方式")):
+        cell = ws.cell(row=OVERTIME_HEADER_ROW, column=col, value=label)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
-        cell.border = THIN_BORDER
-        ws.column_dimensions[get_column_letter(idx)].width = 16
 
-    data_start = 4
+    days_in_month = calendar.monthrange(year, month)[1]
+    for day in range(1, OVERTIME_DAY_COUNT + 1):
+        col = OVERTIME_DAY_START_COL + day - 1
+        value = day if day <= days_in_month else f"{day}*"
+        cell = ws.cell(row=OVERTIME_HEADER_ROW, column=col, value=value)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = CENTER
+
+    calc_headers = ("1.5倍工时", "2倍工时", "3倍工时", "1.5倍合计", "2倍合计", "3倍合计", "加班工资合计")
+    for idx, header in enumerate(calc_headers):
+        col = OVERTIME_CALC_START_COL + idx
+        cell = ws.cell(row=OVERTIME_HEADER_ROW, column=col, value=header)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = CENTER
+
     for offset, employee in enumerate(employees):
-        row = data_start + offset
-        ws.cell(row=row, column=1, value=employee.name)
-        ws.cell(row=row, column=2, value=employee.employee_code)
-        ws.cell(row=row, column=3, value=employee.department)
-        ws.cell(row=row, column=4, value=employee.position)
-        ws.cell(row=row, column=5, value=0)
-        ws.cell(row=row, column=6, value=0)
-        ws.cell(row=row, column=7, value=0)
-        ws.cell(row=row, column=8, value=f"=E{row}+F{row}+G{row}")
-        ws.cell(row=row, column=9, value=0)
-        ws.cell(row=row, column=10, value=f"=H{row}*I{row}*1.5")
-        ws.cell(row=row, column=11, value="")
+        row = OVERTIME_DATA_START_ROW + offset
+        ws.cell(row=row, column=1, value=employee.name or None)
+        ws.cell(row=row, column=2, value=employee.department)
+        ws.cell(row=row, column=3, value=employee.overtime_settlement)
 
-    last_row = data_start + len(employees) - 1
-    _apply_border_range(ws, 3, last_row, 1, len(headers))
+        for day in range(1, OVERTIME_DAY_COUNT + 1):
+            col = OVERTIME_DAY_START_COL + day - 1
+            if day > days_in_month:
+                ws.cell(row=row, column=col, value="")
+                ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F2F2F2")
+            else:
+                ws.cell(row=row, column=col, value=0)
 
-    total_row = last_row + 2
-    ws.cell(row=total_row, column=4, value="合计").font = HEADER_FONT
-    for col, letter in ((5, "E"), (6, "F"), (7, "G"), (8, "H"), (10, "J")):
-        ws.cell(row=total_row, column=col, value=f"=SUM({letter}{data_start}:{letter}{last_row})")
-        ws.cell(row=total_row, column=col).font = HEADER_FONT
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL, value=_overtime_sum_formula(row, OVERTIME_15X_RANGES))
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 1, value=_overtime_sum_formula(row, OVERTIME_2X_RANGES))
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 2, value=_overtime_sum_formula(row, OVERTIME_3X_RANGES))
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 3, value=f"=AJ{row}*1.5")
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 4, value=f"=AK{row}*2")
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 5, value=f"=AL{row}*3")
+        ws.cell(row=row, column=OVERTIME_CALC_START_COL + 6, value=f"=SUM(AM{row}:AO{row})")
+
+    last_row = OVERTIME_DATA_START_ROW + len(employees) - 1
+    _apply_border_range(ws, OVERTIME_HEADER_ROW, last_row, 1, calc_end_col)
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 16
+    for col in range(OVERTIME_DAY_START_COL, day_end_col + 1):
+        ws.column_dimensions[_col_letter(col)].width = 4
 
 
 def build_attendance_workbook(
     year: int,
     month: int,
-    employees: Sequence[TemplateEmployee],
+    employees: Optional[Sequence[TemplateEmployee]] = None,
 ) -> Workbook:
-    """Build the attendance workbook in memory (master template structure)."""
+    resolved = _resolve_employees(employees)
     workbook = Workbook()
     sign_ws = workbook.active
     sign_ws.title = TEMPLATE_SHEETS[0]
@@ -498,10 +429,10 @@ def build_attendance_workbook(
     monthly_ws = workbook.create_sheet(TEMPLATE_SHEETS[2])
     overtime_ws = workbook.create_sheet(TEMPLATE_SHEETS[3])
 
-    _build_sign_sheet(sign_ws, year, month, employees)
+    _build_sign_sheet(sign_ws, year, month, resolved)
     _build_situation_sheet(situation_ws)
-    _build_monthly_summary_sheet(monthly_ws, year, month, employees)
-    _build_overtime_sheet(overtime_ws, year, month, employees)
+    _build_monthly_summary_sheet(monthly_ws, year, month, resolved)
+    _build_overtime_sheet(overtime_ws, year, month, resolved)
     return workbook
 
 
@@ -511,19 +442,8 @@ def generate_attendance_template(
     month: int,
     employees: Optional[Sequence[TemplateEmployee]] = None,
 ) -> Path:
-    """Build the master attendance workbook and save it to *output_path*."""
-    if employees is None:
-        employees = [
-            TemplateEmployee("陈鹏", "朋创", "工程师", "E001"),
-            TemplateEmployee("芮超杰", "电机部", "技术员", "E002"),
-            TemplateEmployee("张成", "项目推进部", "项目经理", "E003"),
-            TemplateEmployee("李明", "品质部", "质检员", "E004"),
-            TemplateEmployee("王芳", "行政部", "人事专员", "E005"),
-        ]
-
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
     workbook = build_attendance_workbook(year, month, employees)
     workbook.save(path)
     return path

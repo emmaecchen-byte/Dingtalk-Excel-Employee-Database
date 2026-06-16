@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=BACKEND_ROOT / "templates" / "attendance_master_template.xlsx",
+        default=BACKEND_ROOT / "templates" / "master_template.xlsx",
         help="Output .xlsx path",
     )
     args = parser.parse_args()
