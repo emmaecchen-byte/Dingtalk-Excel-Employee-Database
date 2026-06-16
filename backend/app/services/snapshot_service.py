@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.excel.field_utils import normalize_numeric_value, normalize_value, snapshot_field_value
+from app.excel.field_utils import get_overtime_day_hours, normalize_numeric_value, normalize_value, snapshot_field_value
 from app.services.excel_generator import get_day_value
 from app.models import ExcelSnapshot, MonthlyAttendance, User, VersionHistory
 
@@ -71,6 +71,9 @@ def serialize_attendance_record(record: MonthlyAttendance) -> Dict[str, Any]:
         ),
         "last_manual_edit": record.last_manual_edit.isoformat() if record.last_manual_edit else None,
         "daily_status": {f"day_{day}": get_day_value(record, day) for day in range(1, 32)},
+        "daily_overtime": {
+            f"overtime_day_{day}": get_overtime_day_hours(record, day) for day in range(1, 32)
+        },
     }
 
 

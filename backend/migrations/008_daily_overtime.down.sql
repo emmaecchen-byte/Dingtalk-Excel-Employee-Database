@@ -1,0 +1,35 @@
+BEGIN;
+
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_1;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_2;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_3;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_4;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_5;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_6;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_7;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_8;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_9;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_10;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_11;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_12;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_13;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_14;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_15;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_16;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_17;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_18;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_19;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_20;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_21;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_22;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_23;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_24;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_25;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_26;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_27;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_28;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_29;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_30;
+ALTER TABLE monthly_attendance DROP COLUMN IF EXISTS overtime_day_31;
+
+COMMIT;

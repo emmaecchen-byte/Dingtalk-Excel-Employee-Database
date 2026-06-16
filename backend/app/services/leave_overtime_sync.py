@@ -158,6 +158,128 @@ def _get_or_create_monthly_record(
     return record
 
 
+def _columnval_day_of_month(day_value: object, year: int, month: int) -> Optional[int]:
+    if not isinstance(day_value, dict):
+        return None
+    date_raw = day_value.get("date")
+    if date_raw is None:
+        return None
+    try:
+        if isinstance(date_raw, (int, float)):
+            dt = datetime.utcfromtimestamp(date_raw / 1000)
+        else:
+            text = str(date_raw).strip()
+            if len(text) < 10:
+                return None
+            dt = datetime.strptime(text[:10], "%Y-%m-%d")
+        if dt.year == year and dt.month == month:
+            return dt.day
+    except (ValueError, OSError, OverflowError):
+        return None
+    return None
+
+
+def _daily_overtime_from_report(
+    userid: str,
+    from_date: str,
+    to_date: str,
+    year: int,
+    month: int,
+) -> Dict[int, float]:
+    daily: Dict[int, float] = {}
+    try:
+        payload = dingtalk_corp_client.get_leave_time_by_names(
+            userid,
+            "加班",
+            from_date,
+            to_date,
+        )
+    except DingTalkAPIError as exc:
+        logger.warning("Overtime report unavailable for %s: %s", userid, exc.message)
+        return daily
+
+    _, _, last_day = month_bounds(year, month)
+    columns = (payload.get("result") or {}).get("columns") or []
+    for column in columns:
+        for day_value in column.get("columnvals") or []:
+            day_num = _columnval_day_of_month(day_value, year, month)
+            if day_num is None or not (1 <= day_num <= last_day):
+                continue
+            try:
+                hours = float(day_value.get("value") or 0)
+            except (TypeError, ValueError):
+                hours = 0.0
+            if hours:
+                daily[day_num] = round(daily.get(day_num, 0.0) + hours, 1)
+    return daily
+
+
+def _approval_overtime_hours(userid: str, approval: Dict) -> float:
+    begin = _format_api_datetime(approval.get("begin_time"))
+    end = _format_api_datetime(approval.get("end_time"))
+    if begin and end:
+        minutes = dingtalk_corp_client.get_overtime_approval_duration(userid, begin, end)
+        if minutes > 0:
+            return _minutes_to_hours(minutes)
+    return _parse_duration_to_hours(
+        approval.get("duration") or approval.get("overtime_duration"),
+        approval.get("duration_unit") or "hour",
+    )
+
+
+def _daily_overtime_from_approvals(
+    userid: str,
+    approvals: List[Dict],
+    year: int,
+    month: int,
+) -> Dict[int, float]:
+    daily: Dict[int, float] = {}
+    _, _, last_day = month_bounds(year, month)
+    for approval in approvals:
+        try:
+            hours = _approval_overtime_hours(userid, approval)
+        except DingTalkAPIError as exc:
+            logger.warning("Overtime approval duration failed for %s: %s", userid, exc.message)
+            hours = _parse_duration_to_hours(
+                approval.get("duration") or approval.get("overtime_duration"),
+                approval.get("duration_unit") or "hour",
+            )
+        if hours <= 0:
+            continue
+        begin = _format_api_datetime(approval.get("begin_time"))
+        if not begin:
+            continue
+        try:
+            day_num = int(begin[8:10])
+        except (ValueError, IndexError):
+            continue
+        if 1 <= day_num <= last_day:
+            daily[day_num] = round(daily.get(day_num, 0.0) + hours, 1)
+    return daily
+
+
+def apply_daily_overtime(
+    record: MonthlyAttendance,
+    daily: Dict[int, float],
+    year: int,
+    month: int,
+) -> float:
+    """Persist ``overtime_day_1`` … ``overtime_day_31`` and refresh ``total_overtime_hours``."""
+    _, _, last_day = month_bounds(year, month)
+    total = 0.0
+    for day in range(1, 32):
+        field = f"overtime_day_{day}"
+        if day <= last_day:
+            hours = daily.get(day, 0.0)
+            setattr(record, field, hours if hours else None)
+            total += hours
+        else:
+            setattr(record, field, None)
+    total = round(total, 1)
+    record.total_overtime_hours = total
+    return total
+
+
 def _sum_leave_hours_from_report(userid: str, from_date: str, to_date: str) -> Dict[str, float]:
     totals = {"personal": 0.0, "sick": 0.0, "annual": 0.0, "compensatory": 0.0}
     try:
@@ -315,57 +437,25 @@ def sync_overtime_for_company(db: Session, company: Company, year: int, month: i
 
     for employee in employees:
         assert employee.dingtalk_user_id is not None
-        overtime_hours = 0.0
         approvals = _collect_month_approvals(employee.dingtalk_user_id, year, month, biz_type=1)
 
-        for approval in approvals:
-            begin = _format_api_datetime(approval.get("begin_time"))
-            end = _format_api_datetime(approval.get("end_time"))
-            hours = 0.0
-
-            if begin and end:
-                minutes = dingtalk_corp_client.get_overtime_approval_duration(
-                    employee.dingtalk_user_id,
-                    begin,
-                    end,
-                )
-                if minutes > 0:
-                    hours = _minutes_to_hours(minutes)
-                else:
-                    hours = _parse_duration_to_hours(
-                        approval.get("duration") or approval.get("overtime_duration"),
-                        approval.get("duration_unit") or "hour",
-                    )
-            else:
-                hours = _parse_duration_to_hours(
-                    approval.get("duration") or approval.get("overtime_duration"),
-                    approval.get("duration_unit") or "hour",
-                )
-
-            overtime_hours = round(overtime_hours + hours, 1)
-
-        if not approvals:
-            try:
-                overtime_payload = dingtalk_corp_client.get_leave_time_by_names(
-                    employee.dingtalk_user_id,
-                    "加班",
-                    from_date,
-                    to_date,
-                )
-                columns = (overtime_payload.get("result") or {}).get("columns") or []
-                overtime_hours = 0.0
-                for column in columns:
-                    for day_value in column.get("columnvals") or []:
-                        try:
-                            overtime_hours += float(day_value.get("value") or 0)
-                        except (TypeError, ValueError):
-                            continue
-                overtime_hours = round(overtime_hours, 1)
-            except DingTalkAPIError as exc:
-                logger.warning("Overtime report fallback failed for %s: %s", employee.name, exc.message)
+        daily = _daily_overtime_from_report(
+            employee.dingtalk_user_id,
+            from_date,
+            to_date,
+            year,
+            month,
+        )
+        if not daily and approvals:
+            daily = _daily_overtime_from_approvals(
+                employee.dingtalk_user_id,
+                approvals,
+                year,
+                month,
+            )
 
         record = _get_or_create_monthly_record(db, company.id, employee.id, year, month)
-        record.total_overtime_hours = overtime_hours
+        overtime_hours = apply_daily_overtime(record, daily, year, month)
         record.last_sync_from_dingtalk = datetime.utcnow()
         record.updated_at = datetime.utcnow()
 
@@ -377,7 +467,12 @@ def sync_overtime_for_company(db: Session, company: Company, year: int, month: i
                 overtime_hours=overtime_hours,
             )
         )
-        logger.info("Overtime sync updated %s: overtime_hours=%s", employee.name, overtime_hours)
+        logger.info(
+            "Overtime sync updated %s: overtime_hours=%s days=%s",
+            employee.name,
+            overtime_hours,
+            sum(1 for day in range(1, 32) if daily.get(day)),
+        )
 
     db.commit()
     summary.message = (

@@ -35,6 +35,19 @@ def normalize_value(value: Any) -> str:
     return text
 
 
+def get_overtime_day_hours(record: MonthlyAttendance, day: int) -> float:
+    """Return overtime hours for ``overtime_day_{day}`` (0.0 when unset)."""
+    if day < 1 or day > 31:
+        return 0.0
+    value = getattr(record, f"overtime_day_{day}", None)
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def get_field_value(record: MonthlyAttendance, field_name: str) -> str:
     if field_name.startswith("day_"):
         overrides = record.manual_overrides or {}
@@ -74,6 +87,16 @@ def apply_field_value(record: MonthlyAttendance, field_name: str, raw_value: Any
             setattr(record, field_name, round(float(raw_value or 0), 1))
         except (TypeError, ValueError):
             setattr(record, field_name, 0.0)
+        return
+    if field_name.startswith("overtime_day_"):
+        if raw_value in (None, ""):
+            setattr(record, field_name, None)
+            return
+        try:
+            hours = round(float(raw_value), 1)
+            setattr(record, field_name, hours if hours else None)
+        except (TypeError, ValueError):
+            setattr(record, field_name, None)
         return
     if field_name.startswith("day_"):
         setattr(record, field_name, str(raw_value) if raw_value is not None else None)

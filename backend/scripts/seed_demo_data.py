@@ -325,6 +325,27 @@ def _build_day_values(
     return values
 
 
+def _build_overtime_day_values(
+    year: int,
+    month: int,
+    *,
+    employee_index: int,
+) -> Dict[str, Optional[float]]:
+    """Assign sample daily overtime hours on a few weekdays."""
+    days_in_month = calendar.monthrange(year, month)[1]
+    values: Dict[str, Optional[float]] = {f"overtime_day_{day}": None for day in range(1, 32)}
+    weekdays = [day for day in range(1, days_in_month + 1) if not _is_weekend(year, month, day)]
+    if len(weekdays) < 2:
+        return values
+
+    start = employee_index % max(1, len(weekdays) - 2)
+    selected_days = weekdays[start : start + 3]
+    hour_options = [2.0, 3.0, 4.0, 2.5, 3.5, 1.5]
+    for offset, day in enumerate(selected_days):
+        values[f"overtime_day_{day}"] = hour_options[(employee_index + offset) % len(hour_options)]
+    return values
+
+
 def _get_or_create_company(db: Session) -> Company:
     company = (
         db.query(Company)
@@ -416,6 +437,7 @@ def _upsert_attendance(
     spec: Dict[str, Any],
     sync_time: datetime,
     force: bool,
+    employee_index: int = 0,
 ) -> MonthlyAttendance:
     record = (
         db.query(MonthlyAttendance)
@@ -436,6 +458,11 @@ def _upsert_attendance(
         absenteeism_count=int(spec["absenteeism_count"]),
         lateness_count=int(spec["lateness_count"]),
         missing_punch_count=int(spec["missing_punch_count"]),
+    )
+    overtime_values = _build_overtime_day_values(
+        DEMO_YEAR,
+        DEMO_MONTH,
+        employee_index=employee_index,
     )
 
     if record is None:
@@ -458,12 +485,17 @@ def _upsert_attendance(
     record.total_sick_leave = 0
     record.total_annual_leave = 0
     record.total_compensatory_leave = 0
-    record.total_overtime_hours = 0
+    record.total_overtime_hours = round(
+        sum(value or 0 for value in overtime_values.values()),
+        1,
+    )
     record.manual_overrides = {}
     record.last_sync_from_dingtalk = sync_time - timedelta(days=2)
     record.updated_at = sync_time
 
     for field_name, value in day_values.items():
+        setattr(record, field_name, value)
+    for field_name, value in overtime_values.items():
         setattr(record, field_name, value)
 
     db.flush()
@@ -624,7 +656,7 @@ def seed_demo_data(db: Session, *, force: bool = False) -> Dict[str, Any]:
     employees_by_code: Dict[str, Employee] = {}
     attendance_records: List[MonthlyAttendance] = []
 
-    for spec in DEMO_EMPLOYEES:
+    for index, spec in enumerate(DEMO_EMPLOYEES):
         employee = _get_or_create_employee(db, company.id, spec)
         employees_by_code[spec["employee_code"]] = employee
         attendance_records.append(
@@ -635,6 +667,7 @@ def seed_demo_data(db: Session, *, force: bool = False) -> Dict[str, Any]:
                 spec=spec,
                 sync_time=sync_time,
                 force=force,
+                employee_index=index,
             )
         )
 

@@ -121,6 +121,13 @@ for _day in range(1, 32):
         mapped_column(f"day_{_day}", String(50), nullable=True),
     )
 
+for _day in range(1, 32):
+    setattr(
+        MonthlyAttendance,
+        f"overtime_day_{_day}",
+        mapped_column(f"overtime_day_{_day}", Numeric(5, 1), nullable=True),
+    )
+
 
 class ExcelSnapshot(Base):
     __tablename__ = "excel_snapshots"

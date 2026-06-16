@@ -52,3 +52,9 @@ def ensure_auth_schema() -> None:
                 column = f"day_{day}"
                 if column not in attendance_columns:
                     conn.execute(text(f"ALTER TABLE monthly_attendance ADD COLUMN {column} VARCHAR(50)"))
+            for day in range(1, 32):
+                column = f"overtime_day_{day}"
+                if column not in attendance_columns:
+                    conn.execute(
+                        text(f"ALTER TABLE monthly_attendance ADD COLUMN {column} NUMERIC(5, 1)")
+                    )

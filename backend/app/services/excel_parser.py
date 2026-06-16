@@ -19,8 +19,7 @@ from app.excel.field_utils import normalize_value
 from app.excel.template_generator import (
     MONTHLY_DAILY_START_COL,
     MONTHLY_DATA_START_ROW,
-    MONTHLY_META_NOTES_COL,
-    MONTHLY_META_SUPPLEMENT_COL,
+    MONTHLY_TITLE_ROW,
     SIGN_DAY_COUNT,
     TEMPLATE_SHEETS,
 )
@@ -66,15 +65,25 @@ def _cell_value(value) -> str:
 
 
 def _parse_title_period(title: object) -> Tuple[Optional[int], Optional[int]]:
-    if not title or "年" not in str(title) or "月" not in str(title):
+    if not title:
         return None, None
-    try:
-        text = str(title)
-        parsed_year = int(text.split("年", 1)[0])
-        parsed_month = int(text.split("年", 1)[1].split("月", 1)[0])
-        return parsed_year, parsed_month
-    except (TypeError, ValueError):
-        return None, None
+    text = str(title)
+    if "年" in text and "月" in text:
+        try:
+            parsed_year = int(text.split("年", 1)[0].split()[-1])
+            parsed_month = int(text.split("年", 1)[1].split("月", 1)[0])
+            return parsed_year, parsed_month
+        except (TypeError, ValueError, IndexError):
+            pass
+    if "统计日期" in text and "至" in text:
+        try:
+            start = text.split("至", 1)[0]
+            year_month = start.split("：", 1)[-1].strip()[:7]
+            parsed_year, parsed_month = year_month.split("-", 1)
+            return int(parsed_year), int(parsed_month)
+        except (TypeError, ValueError, IndexError):
+            return None, None
+    return None, None
 
 
 def parse_monthly_summary_sheet(ws, year: int, month: int) -> Tuple[Tuple[Optional[int], Optional[int]], List[ParsedEmployeeRow]]:
@@ -84,7 +93,7 @@ def parse_monthly_summary_sheet(ws, year: int, month: int) -> Tuple[Tuple[Option
     inferred_period: Tuple[Optional[int], Optional[int]] = (None, None)
 
     for row_index, row in enumerate(ws.iter_rows(values_only=True), start=1):
-        if row_index == 2 and row:
+        if row_index == MONTHLY_TITLE_ROW and row:
             inferred_period = _parse_title_period(row[0])
         if row_index < MONTHLY_DATA_START_ROW:
             continue
@@ -97,10 +106,8 @@ def parse_monthly_summary_sheet(ws, year: int, month: int) -> Tuple[Tuple[Option
 
         parsed = ParsedEmployeeRow(
             name=name,
-            supplement_submitted=_cell_value(row[MONTHLY_META_SUPPLEMENT_COL - 1])
-            if len(row) >= MONTHLY_META_SUPPLEMENT_COL
-            else "",
-            notes=_cell_value(row[MONTHLY_META_NOTES_COL - 1]) if len(row) >= MONTHLY_META_NOTES_COL else "",
+            supplement_submitted="",
+            notes="",
         )
 
         for day in range(1, SIGN_DAY_COUNT + 1):

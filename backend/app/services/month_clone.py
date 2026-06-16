@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, joinedload
 
 from app.excel.attendance_export import generate_attendance_excel, get_day_value
+from app.excel.field_utils import get_overtime_day_hours
 from app.models import MonthlyAttendance, User, VersionHistory
 from app.services.snapshot_service import create_snapshot
 from app.services.version_service import _next_version_number
@@ -122,6 +123,34 @@ def _apply_day_fields(
     target.total_attendance_days = 0
 
 
+def _apply_overtime_day_fields(
+    target: MonthlyAttendance,
+    source: MonthlyAttendance,
+    *,
+    target_year: int,
+    target_month: int,
+    keep_attendance_data: bool,
+    keep_formulas: bool,
+) -> None:
+    target_days = _days_in_month(target_year, target_month)
+    source_days = _days_in_month(source.year, source.month)
+
+    if keep_attendance_data and keep_formulas:
+        for day in range(1, min(target_days, source_days) + 1):
+            hours = get_overtime_day_hours(source, day)
+            setattr(target, f"overtime_day_{day}", hours if hours else None)
+        for day in range(min(target_days, source_days) + 1, target_days + 1):
+            setattr(target, f"overtime_day_{day}", None)
+        for day in range(target_days + 1, 32):
+            setattr(target, f"overtime_day_{day}", None)
+        target.total_overtime_hours = float(source.total_overtime_hours or 0)
+        return
+
+    for day in range(1, 32):
+        setattr(target, f"overtime_day_{day}", None)
+    target.total_overtime_hours = 0
+
+
 def _apply_formula_fields(
     target: MonthlyAttendance,
     source: MonthlyAttendance,
@@ -134,7 +163,6 @@ def _apply_formula_fields(
         "total_sick_leave",
         "total_annual_leave",
         "total_compensatory_leave",
-        "total_overtime_hours",
     ]
     if keep_attendance_data and keep_formulas:
         for field in numeric_fields:
@@ -205,6 +233,14 @@ def _build_target_record(
     _apply_formula_fields(
         target,
         source,
+        keep_attendance_data=options.keep_attendance_data,
+        keep_formulas=options.keep_formulas,
+    )
+    _apply_overtime_day_fields(
+        target,
+        source,
+        target_year=target_year,
+        target_month=target_month,
         keep_attendance_data=options.keep_attendance_data,
         keep_formulas=options.keep_formulas,
     )
