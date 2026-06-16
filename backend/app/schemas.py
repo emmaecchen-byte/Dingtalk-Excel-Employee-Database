@@ -148,14 +148,30 @@ class ExcelFieldChange(BaseModel):
     conflict_id: Optional[int] = None
 
 
+class ExcelUploadConflictPreview(BaseModel):
+    id: int
+    employee_id: int
+    employee_name: str
+    field_name: str
+    dingtalk_value: Optional[str] = None
+    manual_value: Optional[str] = None
+    status: str
+
+
 class ExcelUploadResponse(BaseModel):
     success: bool
     year: int
     month: int
     snapshot_id: int
+    total_changes: int
+    employees_affected: int
+    changes_list: List[ExcelFieldChange]
     changes_detected: int
-    conflicts_created: int
     employees_modified: int
+    conflicts_created: int
+    auto_merged: int = 0
+    has_conflicts: bool = False
+    conflicts_list: List[ExcelUploadConflictPreview] = Field(default_factory=list)
     pending_conflicts_count: int = 0
     changes: List[ExcelFieldChange]
 
@@ -203,6 +219,8 @@ class ConflictResolveResponse(BaseModel):
     resolved_count: int
     pending_conflicts_count: int
     conflict_ids: List[int]
+    skipped_count: int = 0
+    resolution_method: Optional[str] = None
 
 
 class ConflictSingleResolveResponse(BaseModel):
@@ -297,6 +315,16 @@ class VersionDetailResponse(BaseModel):
 
 class VersionRollbackRequest(BaseModel):
     confirm_data_loss: bool = False
+    confirm_dingtalk_overwrite: bool = False
+
+
+class VersionRollbackDingtalkWarning(BaseModel):
+    employee_id: int
+    employee_name: str
+    field_name: str
+    current_value: str
+    rollback_value: str
+    last_sync_from_dingtalk: Optional[str] = None
 
 
 class VersionRollbackChange(BaseModel):
@@ -309,6 +337,7 @@ class VersionRollbackChange(BaseModel):
 
 class VersionRollbackResponse(BaseModel):
     success: bool
+    new_version: int
     version_id: int
     snapshot_id: int
     rolled_back_to_version: int

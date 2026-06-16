@@ -24,6 +24,7 @@ from app.schemas import (
     AttendanceSummaryResponse,
     EmployeeSummary,
     ExcelFieldChange,
+    ExcelUploadConflictPreview,
     ExcelUploadResponse,
     MonthCloneRequest,
     MonthCloneResponse,
@@ -251,6 +252,14 @@ def download_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """
+    Download a populated attendance workbook for the given month.
+
+    - Requires ``hr_admin`` or ``hr_viewer`` role
+    - Loads ``backend/templates/master_template.xlsx`` via openpyxl
+    - Populates 签字 / 情况说明 / 月度汇总 sheets from ``monthly_attendance``
+    - Creates a versioned ``excel_snapshots`` row before streaming the file
+    """
     if year < 2000 or year > 2100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -291,22 +300,27 @@ def download_excel(
 
     background_tasks.add_task(download_result.cleanup)
 
+    snapshot = download_result.snapshot
+    snapshot_id = snapshot.id if snapshot else download_result.snapshot_id
+    snapshot_version = snapshot.snapshot_version if snapshot else ""
+
     logger.info(
-        "Excel download started: user_id=%s email=%s snapshot_id=%s file=%s",
+        "Excel download started: user_id=%s email=%s snapshot_id=%s version=v%s file=%s",
         current_user.id,
         current_user.email,
-        download_result.snapshot.id if download_result.snapshot else download_result.snapshot_id,
+        snapshot_id,
+        snapshot_version,
         download_result.filename,
     )
 
-    snapshot = download_result.snapshot
     return StreamingResponse(
         download_result.iter_content(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{download_result.filename}"',
-            "X-Snapshot-Id": str(snapshot.id if snapshot else download_result.snapshot_id),
-            "X-Snapshot-Version": str(snapshot.snapshot_version if snapshot else ""),
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "X-Snapshot-Id": str(snapshot_id),
+            "X-Snapshot-Version": str(snapshot_version),
         },
     )
 
@@ -344,6 +358,15 @@ async def upload_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """
+    Upload an edited attendance workbook and detect changes vs the latest snapshot.
+
+    - Accepts multipart/form-data: ``year``, ``month``, ``file``
+    - Requires ``hr_admin`` or ``hr_viewer`` role
+    - Parses Sheet 3 ``月度汇总`` for daily status and scalar fields
+    - Diffs against the most recent ``excel_snapshots`` row for the period
+    - Records each change in ``manual_changes`` with ``change_source='excel_upload'``
+    """
     if year < 2000 or year > 2100:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -380,25 +403,47 @@ async def upload_excel(
             detail="Failed to process Excel upload",
         ) from exc
 
+    preview_changes = [
+        ExcelFieldChange(
+            employee_id=change.employee_id,
+            employee_name=change.employee_name,
+            field_name=change.field_name,
+            old_value=change.old_value,
+            new_value=change.new_value,
+            conflict=change.conflict,
+            conflict_id=change.conflict_id,
+        )
+        for change in result.changes[:10]
+    ]
+    all_changes = [
+        ExcelFieldChange(
+            employee_id=change.employee_id,
+            employee_name=change.employee_name,
+            field_name=change.field_name,
+            old_value=change.old_value,
+            new_value=change.new_value,
+            conflict=change.conflict,
+            conflict_id=change.conflict_id,
+        )
+        for change in result.changes
+    ]
+
     return ExcelUploadResponse(
         success=True,
         year=result.year,
         month=result.month,
         snapshot_id=result.snapshot_id,
+        total_changes=result.changes_detected,
+        employees_affected=result.employees_modified,
+        changes_list=preview_changes,
         changes_detected=result.changes_detected,
-        conflicts_created=result.conflicts_created,
         employees_modified=result.employees_modified,
-        pending_conflicts_count=result.pending_conflicts_count,
-        changes=[
-            ExcelFieldChange(
-                employee_id=change.employee_id,
-                employee_name=change.employee_name,
-                field_name=change.field_name,
-                old_value=change.old_value,
-                new_value=change.new_value,
-                conflict=change.conflict,
-                conflict_id=change.conflict_id,
-            )
-            for change in result.changes
+        conflicts_created=result.conflicts_created,
+        auto_merged=result.auto_merged,
+        has_conflicts=result.has_conflicts,
+        conflicts_list=[
+            ExcelUploadConflictPreview(**item) for item in result.conflicts_list
         ],
+        pending_conflicts_count=result.pending_conflicts_count,
+        changes=all_changes,
     )

@@ -1,0 +1,12 @@
+{
+  "name": "dingtalk-attendance",
+  "private": true,
+  "description": "DingTalk Attendance Management System",
+  "scripts": {
+    "seed": "cd backend && python3 scripts/seed_demo_data.py",
+    "seed:force": "cd backend && python3 scripts/seed_demo_data.py --force",
+    "docker:up": "docker compose up -d postgres",
+    "docker:seed": "docker compose --profile seed up seed",
+    "docker:up:seed": "docker compose --profile seed up -d postgres seed"
+  }
+}

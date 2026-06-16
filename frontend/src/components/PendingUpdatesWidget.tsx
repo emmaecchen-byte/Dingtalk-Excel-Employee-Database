@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Card, Empty, Modal, Skeleton, Space, Table, Typography, message } from "antd";
+import { useEffect, useState } from "react";
+import { Badge, Button, Card, Dropdown, Empty, List, Skeleton, Space, Typography } from "antd";
 import { BellOutlined, ExclamationCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import type { ColumnsType } from "antd/es/table";
-import { PendingUpdateListItem, SyncStatusResponse, fetchSyncStatus, getApiErrorMessage } from "../api";
+import type { PendingUpdateListItem } from "../api";
+import { useSyncStatusQuery } from "../hooks/useSyncStatus";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
 
 const { Text } = Typography;
 
-const POLL_INTERVAL_MS = 30_000;
-
 interface PendingUpdatesWidgetProps {
   onOpenConflicts: () => void;
   refreshToken?: number;
-  onCountsChange?: (counts: { pendingUpdates: number; pendingConflicts: number }) => void;
 }
 
 function formatTimestamp(value?: string, locale = "zh-CN") {
@@ -24,7 +21,13 @@ function formatTimestamp(value?: string, locale = "zh-CN") {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString(locale);
+  return date.toLocaleString(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function fieldLabel(
@@ -40,6 +43,9 @@ function fieldLabel(
     anomaly_summary: "fieldAnomalySummary",
     supplement_submitted: "fieldSupplementSubmitted",
     total_overtime_hours: "fieldOvertimeHours",
+    absenteeism_count: "fieldAbsenteeismCount",
+    lateness_count: "fieldLatenessCount",
+    missing_punch_count: "fieldMissingPunchCount",
   };
   const key = labels[fieldName];
   return key ? t(key) : fieldName;
@@ -48,60 +54,54 @@ function fieldLabel(
 export default function PendingUpdatesWidget({
   onOpenConflicts,
   refreshToken = 0,
-  onCountsChange,
 }: PendingUpdatesWidgetProps) {
   const { language, t } = useLanguage();
   const locale = language === "zh" ? "zh-CN" : "en-US";
-
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState<SyncStatusResponse | null>(null);
-  const [updatesModalOpen, setUpdatesModalOpen] = useState(false);
-
-  const loadStatus = useCallback(async () => {
-    try {
-      const response = await fetchSyncStatus();
-      setStatus(response);
-      onCountsChange?.({
-        pendingUpdates: response.pending_updates_count,
-        pendingConflicts: response.pending_conflicts_count,
-      });
-    } catch (error) {
-      setStatus(null);
-      message.error(getApiErrorMessage(error, t("loadSyncStatusFailed")));
-    } finally {
-      setLoading(false);
-    }
-  }, [onCountsChange, t]);
+  const { data: status, isLoading, refetch } = useSyncStatusQuery(true);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
 
   useEffect(() => {
-    loadStatus();
-    const intervalId = window.setInterval(loadStatus, POLL_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [loadStatus, refreshToken]);
+    if (refreshToken > 0) {
+      void refetch();
+    }
+  }, [refreshToken, refetch]);
 
-  const updateColumns: ColumnsType<PendingUpdateListItem> = [
-    {
-      title: t("name"),
-      dataIndex: "employee_name",
-      key: "employee_name",
-      width: 140,
-    },
-    {
-      title: t("pendingUpdatesField"),
-      dataIndex: "field_name",
-      key: "field_name",
-      width: 160,
-      render: (value: string) => fieldLabel(value, t),
-    },
-    {
-      title: t("pendingUpdatesNewValue"),
-      dataIndex: "new_value",
-      key: "new_value",
-      render: (value?: string) => value || "—",
-    },
-  ];
+  const pendingUpdates = status?.pending_updates_count ?? 0;
+  const pendingConflicts = status?.pending_conflicts_count ?? 0;
 
-  if (loading && !status) {
+  const updatesDropdown = (
+    <Card
+      size="small"
+      title={t("pendingUpdatesListTitle")}
+      style={{ width: 360, maxHeight: 360, overflow: "auto", boxShadow: "0 6px 16px rgba(0,0,0,0.12)" }}
+    >
+      {(status?.pending_updates_list.length ?? 0) === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("pendingUpdatesEmpty")} />
+      ) : (
+        <List
+          size="small"
+          dataSource={status?.pending_updates_list ?? []}
+          renderItem={(item: PendingUpdateListItem) => (
+            <List.Item>
+              <List.Item.Meta
+                title={item.employee_name}
+                description={
+                  <Space direction="vertical" size={0}>
+                    <Text type="secondary">{fieldLabel(item.field_name, t)}</Text>
+                    <Text>
+                      {t("pendingUpdatesNewValue")}: {item.new_value || "—"}
+                    </Text>
+                  </Space>
+                }
+              />
+            </List.Item>
+          )}
+        />
+      )}
+    </Card>
+  );
+
+  if (isLoading && !status) {
     return (
       <Card style={{ marginBottom: 16 }}>
         <Skeleton active paragraph={{ rows: 1 }} />
@@ -109,64 +109,48 @@ export default function PendingUpdatesWidget({
     );
   }
 
-  const pendingUpdates = status?.pending_updates_count ?? 0;
-  const pendingConflicts = status?.pending_conflicts_count ?? 0;
-
   return (
-    <>
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap size="middle" style={{ width: "100%", justifyContent: "space-between" }}>
-          <Space wrap size="large">
+    <Card style={{ marginBottom: 16 }}>
+      <Space wrap size="middle" style={{ width: "100%", justifyContent: "space-between" }}>
+        <Space wrap size="large">
+          <Dropdown
+            open={updatesOpen}
+            onOpenChange={setUpdatesOpen}
+            dropdownRender={() => updatesDropdown}
+            trigger={["click"]}
+            disabled={pendingUpdates === 0}
+          >
             <Badge count={pendingUpdates} overflowCount={99} showZero={false}>
-              <Button
-                icon={<BellOutlined />}
-                onClick={() => setUpdatesModalOpen(true)}
-                disabled={pendingUpdates === 0}
-              >
-                {t("pendingUpdates")}
+              <Button icon={<BellOutlined />} disabled={pendingUpdates === 0}>
+                🔔 {t("pendingUpdates")}
               </Button>
             </Badge>
+          </Dropdown>
 
-            <Badge count={pendingConflicts} overflowCount={99} showZero={false}>
-              <Button
-                icon={<ExclamationCircleOutlined />}
-                onClick={onOpenConflicts}
-                disabled={pendingConflicts === 0}
-              >
-                {t("pendingConflicts")}
-              </Button>
-            </Badge>
-          </Space>
-
-          <Space>
-            <SyncOutlined style={{ color: "#1677ff" }} />
-            <Text type="secondary">
-              {t("lastSync")}: {formatTimestamp(status?.last_sync_timestamp, locale)}
-            </Text>
-          </Space>
+          <Badge
+            count={pendingConflicts}
+            overflowCount={99}
+            showZero={false}
+            color={pendingConflicts > 0 ? "red" : undefined}
+          >
+            <Button
+              icon={<ExclamationCircleOutlined />}
+              danger={pendingConflicts > 0}
+              onClick={onOpenConflicts}
+              disabled={pendingConflicts === 0}
+            >
+              ⚠ {t("pendingConflicts")}
+            </Button>
+          </Badge>
         </Space>
-      </Card>
 
-      <Modal
-        title={t("pendingUpdatesListTitle")}
-        open={updatesModalOpen}
-        onCancel={() => setUpdatesModalOpen(false)}
-        footer={null}
-        width={720}
-        destroyOnClose
-      >
-        {(status?.pending_updates_list.length ?? 0) === 0 ? (
-          <Empty description={t("pendingUpdatesEmpty")} />
-        ) : (
-          <Table
-            rowKey={(record, index) => `${record.employee_name}-${record.field_name}-${index}`}
-            size="small"
-            columns={updateColumns}
-            dataSource={status?.pending_updates_list ?? []}
-            pagination={{ pageSize: 8 }}
-          />
-        )}
-      </Modal>
-    </>
+        <Space>
+          <SyncOutlined style={{ color: "#1677ff" }} />
+          <Text type="secondary">
+            {t("lastSync")}: {formatTimestamp(status?.last_sync_timestamp, locale)}
+          </Text>
+        </Space>
+      </Space>
+    </Card>
   );
 }

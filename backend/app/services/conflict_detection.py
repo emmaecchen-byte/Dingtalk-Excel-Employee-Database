@@ -7,12 +7,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.excel.field_utils import apply_field_value, get_field_value, normalize_value
-from app.models import Conflict, ManualChange, MonthlyAttendance, User
+from app.models import Conflict, Employee, ManualChange, MonthlyAttendance, User
 from app.services.sync_counts import count_pending_conflicts
 
 logger = logging.getLogger(__name__)
@@ -27,10 +27,20 @@ VALID_PRIORITIES = frozenset({PRIORITY_MANUAL, PRIORITY_DINGTALK, PRIORITY_ASK})
 class ConflictDetectionResult:
     conflicts: List[Conflict] = field(default_factory=list)
     conflicts_created: int = 0
+    auto_merged: int = 0
     pending_conflicts_count: int = 0
+    conflicts_list: List[Dict[str, Any]] = field(default_factory=list)
     auto_resolved_manual: int = 0
     auto_resolved_dingtalk: int = 0
     ignored_by_priority: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "conflicts_created": self.conflicts_created,
+            "auto_merged": self.auto_merged,
+            "conflicts_list": self.conflicts_list,
+            "pending_conflicts_count": self.pending_conflicts_count,
+        }
 
 
 def get_conflict_priority(user: Optional[User], field_name: str) -> str:
@@ -158,6 +168,7 @@ def _load_attendance_index(
 ) -> Dict[int, MonthlyAttendance]:
     records = (
         db.query(MonthlyAttendance)
+        .options(joinedload(MonthlyAttendance.employee))
         .filter(
             MonthlyAttendance.company_id == company_id,
             MonthlyAttendance.year == year,
@@ -166,6 +177,37 @@ def _load_attendance_index(
         .all()
     )
     return {record.employee_id: record for record in records}
+
+
+def _employee_name(record: Optional[MonthlyAttendance]) -> str:
+    if not record or not record.employee:
+        return ""
+    return record.employee.name or ""
+
+
+def _conflict_payload(conflict: Conflict, employee_name: str) -> Dict[str, Any]:
+    return {
+        "id": conflict.id,
+        "employee_id": conflict.employee_id,
+        "employee_name": employee_name,
+        "field_name": conflict.field_name,
+        "dingtalk_value": conflict.dingtalk_value,
+        "manual_value": conflict.manual_value,
+        "status": conflict.status,
+    }
+
+
+def _apply_manual_change(
+    record: MonthlyAttendance,
+    manual_change: ManualChange,
+    *,
+    now: datetime,
+) -> None:
+    apply_field_value(record, manual_change.field_name, manual_change.new_value)
+    manual_change.merged_to_truth = True
+    manual_change.merged_at = now
+    record.last_manual_edit = now
+    record.updated_at = now
 
 
 def detect_conflicts(
@@ -179,13 +221,17 @@ def detect_conflicts(
     attendance_by_employee_id: Optional[Dict[int, MonthlyAttendance]] = None,
     baseline_timestamp: Optional[datetime] = None,
     auto_apply_resolutions: bool = True,
+    respect_user_priority: bool = True,
 ) -> ConflictDetectionResult:
     """
     Compare manual edits against current DingTalk-backed attendance values.
 
-    For each manual change, if DingTalk synced after the change timestamp and the
-    values differ, either create a pending conflict or auto-resolve per user
-    preference rules (manual wins / dingtalk wins / ask).
+    For each manual change:
+    1. Read the current value from ``monthly_attendance`` (DingTalk-backed truth)
+    2. If ``last_sync_from_dingtalk`` is after the manual change timestamp and the
+       values differ, create a pending ``conflicts`` row
+    3. Otherwise apply the manual value to ``monthly_attendance`` and mark the
+       ``manual_changes`` row as ``merged_to_truth=True`` (when *auto_apply_resolutions*)
     """
     result = ConflictDetectionResult()
     if not manual_changes_list:
@@ -206,77 +252,75 @@ def detect_conflicts(
             )
             continue
 
-        if not dingtalk_is_newer_than_change(
+        dingtalk_value = get_field_value(record, manual_change.field_name)
+        manual_value = manual_change.new_value or ""
+        dingtalk_updated_after_change = dingtalk_is_newer_than_change(
             record,
             manual_change,
             baseline_timestamp=baseline_timestamp,
-        ):
-            continue
-
-        dingtalk_value = get_field_value(record, manual_change.field_name)
-        manual_value = manual_change.new_value or ""
-        if not values_conflict(
+        )
+        has_value_conflict = values_conflict(
             dingtalk_value,
             manual_value,
             old_value=manual_change.old_value,
-        ):
-            continue
-
-        priority = get_conflict_priority(user, manual_change.field_name)
-
-        if priority == PRIORITY_MANUAL:
-            if auto_apply_resolutions:
-                apply_field_value(record, manual_change.field_name, manual_value)
-                record.last_manual_edit = now
-                record.updated_at = now
-                manual_change.merged_to_truth = True
-                manual_change.merged_at = now
-            result.auto_resolved_manual += 1
-            result.ignored_by_priority += 1
-            logger.info(
-                "Conflict auto-resolved (manual priority): employee_id=%s field=%s",
-                manual_change.employee_id,
-                manual_change.field_name,
-            )
-            continue
-
-        if priority == PRIORITY_DINGTALK:
-            manual_change.merged_to_truth = False
-            result.auto_resolved_dingtalk += 1
-            result.ignored_by_priority += 1
-            logger.info(
-                "Conflict auto-resolved (dingtalk priority): employee_id=%s field=%s",
-                manual_change.employee_id,
-                manual_change.field_name,
-            )
-            continue
-
-        conflict = _create_conflict_record(
-            db,
-            company_id=company_id,
-            year=year,
-            month=month,
-            employee_id=manual_change.employee_id,
-            field_name=manual_change.field_name,
-            dingtalk_value=dingtalk_value,
-            manual_value=manual_value,
         )
-        manual_change.merged_to_truth = False
-        result.conflicts.append(conflict)
-        result.conflicts_created += 1
+
+        if dingtalk_updated_after_change and has_value_conflict:
+            if respect_user_priority and user and auto_apply_resolutions:
+                priority = get_conflict_priority(user, manual_change.field_name)
+                if priority == PRIORITY_MANUAL:
+                    _apply_manual_change(record, manual_change, now=now)
+                    result.auto_merged += 1
+                    result.auto_resolved_manual += 1
+                    result.ignored_by_priority += 1
+                    logger.info(
+                        "Conflict auto-resolved (manual priority): employee_id=%s field=%s",
+                        manual_change.employee_id,
+                        manual_change.field_name,
+                    )
+                    continue
+                if priority == PRIORITY_DINGTALK:
+                    manual_change.merged_to_truth = False
+                    result.auto_resolved_dingtalk += 1
+                    result.ignored_by_priority += 1
+                    logger.info(
+                        "Conflict auto-resolved (dingtalk priority): employee_id=%s field=%s",
+                        manual_change.employee_id,
+                        manual_change.field_name,
+                    )
+                    continue
+
+            conflict = _create_conflict_record(
+                db,
+                company_id=company_id,
+                year=year,
+                month=month,
+                employee_id=manual_change.employee_id,
+                field_name=manual_change.field_name,
+                dingtalk_value=dingtalk_value,
+                manual_value=manual_value,
+            )
+            manual_change.merged_to_truth = False
+            result.conflicts.append(conflict)
+            result.conflicts_created += 1
+            result.conflicts_list.append(_conflict_payload(conflict, _employee_name(record)))
+            continue
+
+        if auto_apply_resolutions:
+            _apply_manual_change(record, manual_change, now=now)
+            result.auto_merged += 1
 
     result.pending_conflicts_count = count_pending_conflicts(db, company_id)
 
     logger.info(
         "Conflict detection complete: company_id=%s period=%s-%02d "
-        "created=%s pending_total=%s auto_manual=%s auto_dingtalk=%s",
+        "created=%s auto_merged=%s pending_total=%s",
         company_id,
         year,
         month,
         result.conflicts_created,
+        result.auto_merged,
         result.pending_conflicts_count,
-        result.auto_resolved_manual,
-        result.auto_resolved_dingtalk,
     )
 
     return result

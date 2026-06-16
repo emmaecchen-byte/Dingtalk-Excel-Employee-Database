@@ -15,12 +15,15 @@ import {
   Spin,
   Tag,
   Typography,
+  message,
 } from "antd";
+import { LeftOutlined, RightOutlined } from "@ant-design/icons";
 import {
   batchResolveConflicts,
   ConflictItem,
   ConflictResolutionMethod,
   fetchConflicts,
+  getApiErrorMessage,
   resolveConflict,
 } from "../api";
 import { useLanguage } from "../i18n/LanguageContext";
@@ -57,12 +60,18 @@ function fieldLabel(
     const day = fieldName.replace("day_", "");
     return t("fieldDay", { day });
   }
+
   const labels: Record<string, TranslationKey> = {
     notes: "fieldNotes",
     anomaly_summary: "fieldAnomalySummary",
     supplement_submitted: "fieldSupplementSubmitted",
     total_overtime_hours: "fieldOvertimeHours",
+    absenteeism_count: "fieldAbsenteeismCount",
+    lateness_count: "fieldLatenessCount",
+    missing_punch_count: "fieldMissingPunchCount",
+    total_attendance_days: "fieldAttendanceDays",
   };
+
   const key = labels[fieldName];
   return key ? t(key) : fieldName;
 }
@@ -94,10 +103,15 @@ export default function ConflictResolutionModal({
     try {
       const response = await fetchConflicts(year, month);
       setConflicts(response.conflicts);
-      setActiveIndex(0);
-    } catch {
-      setError(t("conflictLoadFailed"));
+      setActiveIndex((current) =>
+        response.conflicts.length === 0 ? 0 : Math.min(current, response.conflicts.length - 1)
+      );
+      return response.conflicts;
+    } catch (err) {
+      const messageText = getApiErrorMessage(err, t("conflictLoadFailed"));
+      setError(messageText);
       setConflicts([]);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -105,7 +119,9 @@ export default function ConflictResolutionModal({
 
   useEffect(() => {
     if (open) {
-      loadConflicts();
+      setApplyToAll(false);
+      setActiveIndex(0);
+      void loadConflicts();
     }
   }, [open, loadConflicts]);
 
@@ -128,13 +144,10 @@ export default function ConflictResolutionModal({
   }, [choice]);
 
   const resolvedValue = useMemo(() => {
-    if (!activeConflict) {
+    if (!activeConflict || choice !== "manual") {
       return undefined;
     }
-    if (choice === "manual") {
-      return customValue;
-    }
-    return undefined;
+    return customValue;
   }, [activeConflict, choice, customValue]);
 
   const targetConflictIds = useMemo(() => {
@@ -146,6 +159,23 @@ export default function ConflictResolutionModal({
     }
     return [activeConflict.id];
   }, [activeConflict, applyToAll, conflicts, activeIndex]);
+
+  const goPrevious = () => {
+    setActiveIndex((index) => Math.max(index - 1, 0));
+  };
+
+  const goNext = () => {
+    setActiveIndex((index) => Math.min(index + 1, conflicts.length - 1));
+  };
+
+  const finishOrRefresh = async () => {
+    const remaining = await loadConflicts();
+    if (remaining.length === 0) {
+      message.success(t("conflictResolveSuccess"));
+      onResolved();
+      onClose();
+    }
+  };
 
   const handleSave = async () => {
     if (!activeConflict || targetConflictIds.length === 0) {
@@ -171,15 +201,18 @@ export default function ConflictResolutionModal({
           resolved_value: resolvedValue,
         });
       }
-      if (applyToAll || activeIndex >= conflicts.length - 1) {
+
+      message.success(t("conflictSave"));
+
+      if (applyToAll) {
         onResolved();
         onClose();
-      } else {
-        await loadConflicts();
-        setActiveIndex(0);
+        return;
       }
-    } catch {
-      setError(t("conflictResolveFailed"));
+
+      await finishOrRefresh();
+    } catch (err) {
+      setError(getApiErrorMessage(err, t("conflictResolveFailed")));
     } finally {
       setSaving(false);
     }
@@ -190,7 +223,7 @@ export default function ConflictResolutionModal({
       title={t("conflictModalTitle")}
       open={open}
       onCancel={onClose}
-      width={900}
+      width={920}
       footer={
         <Space>
           <Button onClick={onClose}>{t("cancel")}</Button>
@@ -198,7 +231,7 @@ export default function ConflictResolutionModal({
             type="primary"
             loading={saving}
             disabled={!activeConflict || loading}
-            onClick={handleSave}
+            onClick={() => void handleSave()}
           >
             {t("conflictSave")}
           </Button>
@@ -219,7 +252,12 @@ export default function ConflictResolutionModal({
           <Col xs={24} md={8}>
             <List
               size="small"
-              header={<Text strong>{t("conflictListHeader")}</Text>}
+              header={
+                <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                  <Text strong>{t("conflictListHeader")}</Text>
+                  <Tag color="blue">{conflicts.length}</Tag>
+                </Space>
+              }
               dataSource={conflicts}
               renderItem={(item, index) => (
                 <List.Item
@@ -243,13 +281,38 @@ export default function ConflictResolutionModal({
           <Col xs={24} md={16}>
             {activeConflict && (
               <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                <div>
-                  <Title level={5} style={{ marginTop: 0 }}>
-                    {activeConflict.employee_name}
-                    <Tag style={{ marginLeft: 8 }}>{activeConflict.department}</Tag>
-                  </Title>
-                  <Text type="secondary">{fieldLabel(activeConflict.field_name, t)}</Text>
-                </div>
+                <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                  <div>
+                    <Title level={5} style={{ marginTop: 0, marginBottom: 4 }}>
+                      {activeConflict.employee_name}
+                      <Tag style={{ marginLeft: 8 }}>{activeConflict.department}</Tag>
+                    </Title>
+                    <Text type="secondary">{fieldLabel(activeConflict.field_name, t)}</Text>
+                  </div>
+                  <Text type="secondary">
+                    {t("conflictProgress", {
+                      current: activeIndex + 1,
+                      total: conflicts.length,
+                    })}
+                  </Text>
+                </Space>
+
+                <Space>
+                  <Button
+                    icon={<LeftOutlined />}
+                    disabled={activeIndex === 0}
+                    onClick={goPrevious}
+                  >
+                    {t("conflictPrevious")}
+                  </Button>
+                  <Button
+                    icon={<RightOutlined />}
+                    disabled={activeIndex >= conflicts.length - 1}
+                    onClick={goNext}
+                  >
+                    {t("conflictNext")}
+                  </Button>
+                </Space>
 
                 <Row gutter={16}>
                   <Col span={12}>
@@ -258,10 +321,11 @@ export default function ConflictResolutionModal({
                       title={t("conflictManualSide")}
                       styles={{ body: { minHeight: 120 } }}
                     >
-                      <Text>{activeConflict.manual_value || "—"}</Text>
+                      <Text style={{ fontSize: 16 }}>{activeConflict.manual_value || "—"}</Text>
                       <div style={{ marginTop: 12 }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          {t("conflictEditedAt")}: {formatTimestamp(activeConflict.manual_edit_at, locale)}
+                          {t("conflictEditedAt")}:{" "}
+                          {formatTimestamp(activeConflict.manual_edit_at, locale)}
                         </Text>
                       </div>
                     </Card>
@@ -272,10 +336,11 @@ export default function ConflictResolutionModal({
                       title={t("conflictDingTalkSide")}
                       styles={{ body: { minHeight: 120 } }}
                     >
-                      <Text>{activeConflict.dingtalk_value || "—"}</Text>
+                      <Text style={{ fontSize: 16 }}>{activeConflict.dingtalk_value || "—"}</Text>
                       <div style={{ marginTop: 12 }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          {t("conflictSyncedAt")}: {formatTimestamp(activeConflict.dingtalk_sync_at, locale)}
+                          {t("conflictSyncedAt")}:{" "}
+                          {formatTimestamp(activeConflict.dingtalk_sync_at, locale)}
                         </Text>
                       </div>
                     </Card>
@@ -302,7 +367,11 @@ export default function ConflictResolutionModal({
                   />
                 )}
 
-                <Checkbox checked={applyToAll} onChange={(event) => setApplyToAll(event.target.checked)}>
+                <Checkbox
+                  checked={applyToAll}
+                  onChange={(event) => setApplyToAll(event.target.checked)}
+                  disabled={remainingCount <= 1}
+                >
                   {t("conflictApplyToAll", { count: remainingCount })}
                 </Checkbox>
               </Space>

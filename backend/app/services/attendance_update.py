@@ -22,6 +22,7 @@ EDITABLE_FIELDS = frozenset(
         "absenteeism_count",
         "lateness_count",
         "missing_punch_count",
+        "supplement_submitted",
         "notes",
     }
 )

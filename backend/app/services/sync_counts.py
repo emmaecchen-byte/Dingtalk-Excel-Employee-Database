@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.models import Conflict, Employee, MonthlyAttendance, PendingUpdate
+from app.services.sync_log_service import get_last_successful_sync_timestamp
 from app.sync_state import sync_state
 
 
@@ -30,6 +31,10 @@ def count_pending_conflicts(db: Session, company_id: int) -> int:
 
 
 def _resolve_last_sync_timestamp(db: Session, company_id: int) -> Optional[datetime]:
+    from_sync_logs = get_last_successful_sync_timestamp(db, company_id)
+    if from_sync_logs:
+        return from_sync_logs
+
     candidates: List[datetime] = []
 
     for timestamp in (

@@ -8,35 +8,47 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { message } from "antd";
+import { message, Progress } from "antd";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AttendanceSummaryResponse,
   MonthlyAttendanceResponse,
   MonthlyStats,
   downloadExcel,
+  downloadPdf,
   fetchAttendance,
-  fetchAttendanceSummary,
   getApiErrorMessage,
   syncAll,
   uploadExcel,
 } from "../api";
+import { calculateStatsFromEmployees } from "../lib/attendanceStats";
 import { useLanguage } from "../i18n/LanguageContext";
+import { dashboardKeys } from "../hooks/dashboardKeys";
+import { useSyncStatusQuery } from "../hooks/useSyncStatus";
 
 export type AnomalyFilter = "all" | "issues_only";
 
+const now = new Date();
+
 interface DashboardContextValue {
+  selectedYear: number;
+  selectedMonth: number;
+  setSelectedYear: (year: number) => void;
+  setSelectedMonth: (month: number) => void;
   year: number;
   month: number;
   setYear: (year: number) => void;
   setMonth: (month: number) => void;
+  employeeData: MonthlyAttendanceResponse["employees"];
   data: MonthlyAttendanceResponse | null;
-  summary: AttendanceSummaryResponse | null;
   stats: MonthlyStats | null;
+  isLoading: boolean;
   attendanceLoading: boolean;
-  summaryLoading: boolean;
   syncing: boolean;
   uploading: boolean;
+  uploadProgress: number;
   downloading: boolean;
+  exportingPdf: boolean;
+  handleExportPdf: (openInNewTab?: boolean) => Promise<void>;
   search: string;
   setSearch: (value: string) => void;
   department: string;
@@ -49,8 +61,6 @@ interface DashboardContextValue {
   setPageSize: (size: number) => void;
   departments: string[];
   filteredEmployees: MonthlyAttendanceResponse["employees"];
-  refreshAttendance: () => Promise<void>;
-  refreshSummary: () => Promise<void>;
   refreshAll: () => Promise<void>;
   handleSync: () => Promise<void>;
   handleDownloadExcel: () => Promise<void>;
@@ -67,15 +77,11 @@ const DashboardContext = createContext<DashboardContextValue | null>(null);
 
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const { t } = useLanguage();
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(5);
-  const [data, setData] = useState<MonthlyAttendanceResponse | null>(null);
-  const [summary, setSummary] = useState<AttendanceSummaryResponse | null>(null);
-  const [attendanceLoading, setAttendanceLoading] = useState(true);
-  const [summaryLoading, setSummaryLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const queryClient = useQueryClient();
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("all");
   const [anomalyFilter, setAnomalyFilter] = useState<AnomalyFilter>("all");
@@ -83,153 +89,187 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [pageSize, setPageSize] = useState(10);
   const [syncRefreshToken, setSyncRefreshToken] = useState(0);
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [localData, setLocalData] = useState<MonthlyAttendanceResponse | null>(null);
 
   const bumpSyncRefresh = useCallback(() => {
     setSyncRefreshToken((value) => value + 1);
   }, []);
 
-  const refreshAttendance = useCallback(async () => {
-    setAttendanceLoading(true);
-    try {
-      const response = await fetchAttendance(year, month);
-      setData(response);
-    } catch (error) {
-      message.error(getApiErrorMessage(error, t("loadAttendanceFailed")));
-      setData(null);
-    } finally {
-      setAttendanceLoading(false);
-    }
-  }, [year, month, t]);
+  const attendanceQuery = useQuery({
+    queryKey: dashboardKeys.attendance(selectedYear, selectedMonth),
+    queryFn: () => fetchAttendance(selectedYear, selectedMonth),
+    retry: 1,
+  });
 
-  const refreshSummary = useCallback(async () => {
-    setSummaryLoading(true);
-    try {
-      const response = await fetchAttendanceSummary(year, month);
-      setSummary(response);
-    } catch (error) {
-      message.error(getApiErrorMessage(error, t("loadSummaryFailed")));
-      setSummary(null);
-    } finally {
-      setSummaryLoading(false);
-    }
-  }, [year, month, t]);
-
-  const refreshAll = useCallback(async () => {
-    await Promise.all([refreshAttendance(), refreshSummary()]);
-  }, [refreshAttendance, refreshSummary]);
+  const syncStatusQuery = useSyncStatusQuery(true);
 
   useEffect(() => {
-    refreshAttendance();
-    refreshSummary();
-  }, [refreshAttendance, refreshSummary]);
+    if (attendanceQuery.data) {
+      setLocalData(attendanceQuery.data);
+    }
+  }, [attendanceQuery.data]);
+
+  useEffect(() => {
+    if (attendanceQuery.isError) {
+      message.error(getApiErrorMessage(attendanceQuery.error, t("loadAttendanceFailed")));
+      setLocalData(null);
+    }
+  }, [attendanceQuery.isError, attendanceQuery.error, t]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, department, anomalyFilter, year, month]);
+  }, [search, department, anomalyFilter, selectedYear, selectedMonth]);
+
+  const data = localData;
+  const employeeData = data?.employees ?? [];
+
+  const stats = useMemo(() => {
+    if (!employeeData.length && !data) {
+      return null;
+    }
+    return calculateStatsFromEmployees(employeeData, {
+      pendingConflicts: syncStatusQuery.data?.pending_conflicts_count ?? data?.stats.pending_conflicts ?? 0,
+      pendingUpdates: syncStatusQuery.data?.pending_updates_count ?? data?.stats.pending_updates ?? 0,
+    });
+  }, [employeeData, data, syncStatusQuery.data]);
 
   const departments = useMemo(() => {
-    const values = new Set((data?.employees ?? []).map((employee) => employee.department));
+    const values = new Set(employeeData.map((employee) => employee.department));
     return Array.from(values).sort();
-  }, [data]);
+  }, [employeeData]);
 
   const filteredEmployees = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return (data?.employees ?? []).filter((employee) => {
+    return employeeData.filter((employee) => {
       const matchesSearch = !query || employee.name.toLowerCase().includes(query);
       const matchesDepartment = department === "all" || employee.department === department;
       const matchesAnomaly = anomalyFilter === "all" || employee.status === "warning";
       return matchesSearch && matchesDepartment && matchesAnomaly;
     });
-  }, [data, search, department, anomalyFilter]);
+  }, [employeeData, search, department, anomalyFilter]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: dashboardKeys.attendance(selectedYear, selectedMonth) }),
+      queryClient.invalidateQueries({ queryKey: dashboardKeys.syncStatus() }),
+    ]);
+    bumpSyncRefresh();
+  }, [queryClient, selectedYear, selectedMonth, bumpSyncRefresh]);
+
+  const syncMutation = useMutation({
+    mutationFn: syncAll,
+    onSuccess: async (result) => {
+      message.success(result.message ?? t("syncSuccess"));
+      await refreshAll();
+    },
+    onError: (error) => {
+      message.error(getApiErrorMessage(error, t("syncFailed")));
+    },
+  });
+
+  const downloadMutation = useMutation({
+    mutationFn: () => downloadExcel(selectedYear, selectedMonth),
+    onError: (error) => {
+      message.error(getApiErrorMessage(error, t("downloadExcelFailed")));
+    },
+  });
+
+  const exportPdfMutation = useMutation({
+    mutationFn: (openInNewTab: boolean) => downloadPdf(selectedYear, selectedMonth, { openInNewTab }),
+    onSuccess: (_data, openInNewTab) => {
+      message.success(openInNewTab ? t("exportPdfOpened") : t("exportPdfSuccess"));
+    },
+    onError: (error) => {
+      message.error(getApiErrorMessage(error, t("exportPdfFailed")));
+    },
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) =>
+      uploadExcel(selectedYear, selectedMonth, file, (percent) => setUploadProgress(percent)),
+    onSuccess: async (result) => {
+      message.success(
+        t("uploadExcelSuccess", {
+          changes: result.changes_detected,
+          conflicts: result.conflicts_created,
+        })
+      );
+      await refreshAll();
+      if (result.has_conflicts || result.conflicts_created > 0) {
+        setConflictModalOpen(true);
+      }
+    },
+    onError: (error) => {
+      message.error(getApiErrorMessage(error, t("uploadExcelFailed")));
+    },
+    onSettled: () => {
+      setUploadProgress(0);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = "";
+      }
+    },
+  });
 
   const handleSync = useCallback(async () => {
-    setSyncing(true);
-    try {
-      const result = await syncAll();
-      message.success(result.message);
-      await refreshAll();
-      bumpSyncRefresh();
-    } catch (error) {
-      message.error(getApiErrorMessage(error, t("syncFailed")));
-    } finally {
-      setSyncing(false);
-    }
-  }, [refreshAll, bumpSyncRefresh, t]);
+    await syncMutation.mutateAsync();
+  }, [syncMutation]);
 
   const handleDownloadExcel = useCallback(async () => {
-    setDownloading(true);
-    try {
-      await downloadExcel(year, month);
-    } catch (error) {
-      message.error(getApiErrorMessage(error, t("downloadExcelFailed")));
-    } finally {
-      setDownloading(false);
-    }
-  }, [year, month, t]);
+    await downloadMutation.mutateAsync();
+  }, [downloadMutation]);
+
+  const handleExportPdf = useCallback(
+    async (openInNewTab = false) => {
+      await exportPdfMutation.mutateAsync(openInNewTab);
+    },
+    [exportPdfMutation]
+  );
 
   const handleUploadExcel = useCallback(
     async (file: File) => {
-      setUploading(true);
-      try {
-        const result = await uploadExcel(year, month, file);
-        message.success(
-          t("uploadExcelSuccess", {
-            changes: result.changes_detected,
-            conflicts: result.conflicts_created,
-          })
-        );
-        await refreshAll();
-        bumpSyncRefresh();
-        if (result.conflicts_created > 0) {
-          setConflictModalOpen(true);
-        }
-      } catch (error) {
-        message.error(getApiErrorMessage(error, t("uploadExcelFailed")));
-      } finally {
-        setUploading(false);
-        if (uploadInputRef.current) {
-          uploadInputRef.current.value = "";
-        }
-      }
+      await uploadMutation.mutateAsync(file);
     },
-    [year, month, refreshAll, bumpSyncRefresh, t]
+    [uploadMutation]
   );
 
   const handleDataChange = useCallback((nextData: MonthlyAttendanceResponse) => {
-    setData(nextData);
-    setSummary((current) =>
-      current
-        ? { ...current, stats: nextData.stats }
-        : {
-            year: nextData.year,
-            month: nextData.month,
-            stats: nextData.stats,
-            last_sync: nextData.last_sync,
-          }
-    );
-  }, []);
+    setLocalData(nextData);
+    queryClient.setQueryData(dashboardKeys.attendance(nextData.year, nextData.month), nextData);
+  }, [queryClient]);
 
   const triggerUpload = useCallback(() => {
     uploadInputRef.current?.click();
   }, []);
 
-  const stats = summary?.stats ?? data?.stats ?? null;
+  const isLoading =
+    attendanceQuery.isLoading ||
+    attendanceQuery.isFetching ||
+    syncMutation.isPending ||
+    downloadMutation.isPending ||
+    exportPdfMutation.isPending ||
+    uploadMutation.isPending;
 
   const value = useMemo<DashboardContextValue>(
     () => ({
-      year,
-      month,
-      setYear,
-      setMonth,
+      selectedYear,
+      selectedMonth,
+      setSelectedYear,
+      setSelectedMonth,
+      year: selectedYear,
+      month: selectedMonth,
+      setYear: setSelectedYear,
+      setMonth: setSelectedMonth,
+      employeeData,
       data,
-      summary,
       stats,
-      attendanceLoading,
-      summaryLoading,
-      syncing,
-      uploading,
-      downloading,
+      isLoading,
+      attendanceLoading: attendanceQuery.isLoading || attendanceQuery.isFetching,
+      syncing: syncMutation.isPending,
+      uploading: uploadMutation.isPending,
+      uploadProgress,
+      downloading: downloadMutation.isPending,
+      exportingPdf: exportPdfMutation.isPending,
       search,
       setSearch,
       department,
@@ -242,11 +282,10 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setPageSize,
       departments,
       filteredEmployees,
-      refreshAttendance,
-      refreshSummary,
       refreshAll,
       handleSync,
       handleDownloadExcel,
+      handleExportPdf,
       handleUploadExcel,
       triggerUpload,
       handleDataChange,
@@ -256,16 +295,20 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       setConflictModalOpen,
     }),
     [
-      year,
-      month,
+      selectedYear,
+      selectedMonth,
+      employeeData,
       data,
-      summary,
       stats,
-      attendanceLoading,
-      summaryLoading,
-      syncing,
-      uploading,
-      downloading,
+      isLoading,
+      attendanceQuery.isLoading,
+      attendanceQuery.isFetching,
+      syncMutation.isPending,
+      uploadMutation.isPending,
+      uploadProgress,
+      downloadMutation.isPending,
+      exportPdfMutation.isPending,
+      handleExportPdf,
       search,
       department,
       anomalyFilter,
@@ -273,8 +316,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       pageSize,
       departments,
       filteredEmployees,
-      refreshAttendance,
-      refreshSummary,
       refreshAll,
       handleSync,
       handleDownloadExcel,
@@ -301,6 +342,21 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           }
         }}
       />
+      {uploadMutation.isPending && uploadProgress > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 1000,
+            padding: "0 24px",
+            background: "rgba(255,255,255,0.95)",
+          }}
+        >
+          <Progress percent={uploadProgress} status="active" showInfo />
+        </div>
+      )}
       {children}
     </DashboardContext.Provider>
   );

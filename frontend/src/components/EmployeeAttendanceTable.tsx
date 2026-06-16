@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircleOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
-import { Input, InputNumber, Table, Tag, message } from "antd";
+import { Input, InputNumber, Select, Table, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   EmployeeSummary,
@@ -15,10 +15,16 @@ type EditableField =
   | "absenteeism_count"
   | "lateness_count"
   | "missing_punch_count"
+  | "supplement_submitted"
   | "notes";
 
 const MANUAL_EDIT_STYLE: React.CSSProperties = {
   backgroundColor: "#fffbe6",
+};
+
+const CONFLICT_STYLE: React.CSSProperties = {
+  backgroundColor: "#fff7e6",
+  border: "1px solid #ffa940",
 };
 
 interface EmployeeAttendanceTableProps {
@@ -40,11 +46,32 @@ interface EditingCell {
   field: EditableField;
 }
 
-function getFieldValue(employee: EmployeeSummary, field: EditableField): string | number {
+function cellKey(employeeId: number, field: EditableField): string {
+  return `${employeeId}-${field}`;
+}
+
+function getFieldValue(employee: EmployeeSummary, field: EditableField): string {
   if (field === "notes") {
     return employee.notes ?? "";
   }
-  return employee[field];
+  if (field === "supplement_submitted") {
+    return employee.supplement_submitted ? "true" : "false";
+  }
+  return String(employee[field]);
+}
+
+function formatDisplayValue(
+  employee: EmployeeSummary,
+  field: EditableField,
+  t: (key: TranslationKey) => string
+): string {
+  if (field === "notes") {
+    return employee.notes ?? "";
+  }
+  if (field === "supplement_submitted") {
+    return employee.supplement_submitted ? t("yes") : t("no");
+  }
+  return String(employee[field]);
 }
 
 interface EditableCellProps {
@@ -53,6 +80,7 @@ interface EditableCellProps {
   editable: boolean;
   isEditing: boolean;
   isManual: boolean;
+  isConflict: boolean;
   saving: boolean;
   onStartEdit: () => void;
   onSave: (value: string) => void;
@@ -65,17 +93,22 @@ function EditableCell({
   editable,
   isEditing,
   isManual,
+  isConflict,
   saving,
   onStartEdit,
   onSave,
   onCancel,
 }: EditableCellProps) {
+  const { t } = useLanguage();
   const initial = getFieldValue(employee, field);
-  const [draft, setDraft] = useState<string | number>(initial);
+  const display = formatDisplayValue(employee, field, t);
+  const [draft, setDraft] = useState<string>(initial);
+  const committedRef = useRef(false);
 
   useEffect(() => {
     if (isEditing) {
       setDraft(initial);
+      committedRef.current = false;
     }
   }, [isEditing, initial]);
 
@@ -84,11 +117,11 @@ function EditableCell({
     padding: "4px 8px",
     cursor: editable ? "pointer" : "default",
     borderRadius: 4,
-    ...(isManual ? MANUAL_EDIT_STYLE : {}),
+    ...(isConflict ? CONFLICT_STYLE : isManual ? MANUAL_EDIT_STYLE : {}),
   };
 
   if (!editable) {
-    return <div style={cellStyle}>{initial || "—"}</div>;
+    return <div style={cellStyle}>{display || "—"}</div>;
   }
 
   if (!isEditing) {
@@ -96,27 +129,58 @@ function EditableCell({
       <div
         style={cellStyle}
         onDoubleClick={onStartEdit}
-        title={editable ? "Double-click to edit" : undefined}
+        title={t("attendanceEditHint")}
       >
-        {initial === "" ? "—" : initial}
+        {display === "" ? "—" : display}
       </div>
     );
   }
 
-  const commit = () => {
-    onSave(String(draft));
+  const commit = (value?: string) => {
+    if (committedRef.current) {
+      return;
+    }
+    committedRef.current = true;
+    onSave(value ?? draft);
   };
+
+  if (field === "supplement_submitted") {
+    return (
+      <Select
+        size="small"
+        autoFocus
+        defaultOpen
+        disabled={saving}
+        style={{ width: "100%" }}
+        value={draft}
+        options={[
+          { value: "true", label: t("yes") },
+          { value: "false", label: t("no") },
+        ]}
+        onChange={(value) => {
+          setDraft(value);
+          commit(value);
+        }}
+        onBlur={() => onCancel()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            onCancel();
+          }
+        }}
+      />
+    );
+  }
 
   if (field === "notes") {
     return (
       <Input
         size="small"
         autoFocus
-        value={String(draft)}
+        value={draft}
         disabled={saving}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onPressEnter={commit}
+        onBlur={() => commit()}
+        onPressEnter={() => commit()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             onCancel();
@@ -131,13 +195,15 @@ function EditableCell({
       size="small"
       autoFocus
       min={0}
-      value={typeof draft === "number" ? draft : Number(draft) || 0}
+      value={Number(draft) || 0}
       disabled={saving}
       style={{ width: "100%" }}
-      onChange={(value) => setDraft(value ?? 0)}
-      onBlur={commit}
-      onPressEnter={commit}
+      onChange={(value) => setDraft(String(value ?? 0))}
+      onBlur={() => commit()}
       onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          commit();
+        }
         if (event.key === "Escape") {
           onCancel();
         }
@@ -162,6 +228,12 @@ export default function EmployeeAttendanceTable({
   const { t } = useLanguage();
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [conflictCells, setConflictCells] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setConflictCells(new Set());
+    setEditingCell(null);
+  }, [year, month]);
 
   const fieldTitle = useCallback(
     (key: TranslationKey) => t(key),
@@ -181,29 +253,14 @@ export default function EmployeeAttendanceTable({
     [data, onDataChange]
   );
 
-  const handleSave = useCallback(
-    async (employee: EmployeeSummary, field: EditableField, rawValue: string) => {
-      if (!data) {
-        return;
-      }
-
-      const previousValue = getFieldValue(employee, field);
-      const normalized =
-        field === "notes" ? rawValue.trim() : String(Number(rawValue) || 0);
-
-      if (String(previousValue) === normalized) {
-        setEditingCell(null);
-        return;
-      }
-
-      const saveKey = `${employee.id}-${field}`;
-      setSavingKey(saveKey);
-
-      const snapshot = structuredClone(data);
+  const applyOptimisticUpdate = useCallback(
+    (employee: EmployeeSummary, field: EditableField, normalized: string) => {
       updateEmployee(employee.id, (current) => {
         const next = { ...current };
         if (field === "notes") {
           next.notes = normalized;
+        } else if (field === "supplement_submitted") {
+          next.supplement_submitted = normalized === "true";
         } else {
           next[field] = Number(normalized);
         }
@@ -212,6 +269,36 @@ export default function EmployeeAttendanceTable({
         next.manual_override_fields = Array.from(overrides);
         return next;
       });
+    },
+    [updateEmployee]
+  );
+
+  const handleSave = useCallback(
+    async (employee: EmployeeSummary, field: EditableField, rawValue: string) => {
+      if (!data) {
+        return;
+      }
+
+      const previousValue = getFieldValue(employee, field);
+      const normalized =
+        field === "notes"
+          ? rawValue.trim()
+          : field === "supplement_submitted"
+            ? rawValue === "true"
+              ? "true"
+              : "false"
+            : String(Number(rawValue) || 0);
+
+      if (previousValue === normalized) {
+        setEditingCell(null);
+        return;
+      }
+
+      const saveKey = cellKey(employee.id, field);
+      setSavingKey(saveKey);
+
+      const snapshot = structuredClone(data);
+      applyOptimisticUpdate(employee, field, normalized);
 
       try {
         const result = await patchAttendance(year, month, employee.id, {
@@ -221,13 +308,28 @@ export default function EmployeeAttendanceTable({
 
         if (result.conflict_detected) {
           onDataChange(snapshot);
+          setConflictCells((current) => {
+            const next = new Set(current);
+            next.add(saveKey);
+            return next;
+          });
           message.warning(t("attendanceEditConflict"));
           onConflictDetected?.();
         } else {
+          setConflictCells((current) => {
+            if (!current.has(saveKey)) {
+              return current;
+            }
+            const next = new Set(current);
+            next.delete(saveKey);
+            return next;
+          });
           updateEmployee(employee.id, (current) => {
             const next = { ...current };
             if (field === "notes") {
               next.notes = result.new_value ?? normalized;
+            } else if (field === "supplement_submitted") {
+              next.supplement_submitted = (result.new_value ?? normalized) === "true";
             } else {
               next[field] = Number(result.new_value ?? normalized);
             }
@@ -244,16 +346,27 @@ export default function EmployeeAttendanceTable({
         setEditingCell(null);
       }
     },
-    [data, month, onConflictDetected, onDataChange, t, updateEmployee, year]
+    [
+      applyOptimisticUpdate,
+      data,
+      month,
+      onConflictDetected,
+      onDataChange,
+      t,
+      updateEmployee,
+      year,
+    ]
   );
 
   const renderEditable = useCallback(
     (field: EditableField) =>
       (_: unknown, record: EmployeeSummary) => {
+        const key = cellKey(record.id, field);
         const isEditing =
           editingCell?.employeeId === record.id && editingCell.field === field;
         const isManual = (record.manual_override_fields ?? []).includes(field);
-        const saving = savingKey === `${record.id}-${field}`;
+        const isConflict = conflictCells.has(key);
+        const saving = savingKey === key;
 
         return (
           <EditableCell
@@ -262,14 +375,15 @@ export default function EmployeeAttendanceTable({
             editable={editable}
             isEditing={isEditing}
             isManual={isManual}
+            isConflict={isConflict}
             saving={saving}
             onStartEdit={() => setEditingCell({ employeeId: record.id, field })}
             onCancel={() => setEditingCell(null)}
-            onSave={(value) => handleSave(record, field, value)}
+            onSave={(value) => void handleSave(record, field, value)}
           />
         );
       },
-    [editable, editingCell, handleSave, savingKey]
+    [conflictCells, editable, editingCell, handleSave, savingKey]
   );
 
   const columns: ColumnsType<EmployeeSummary> = useMemo(
@@ -303,6 +417,13 @@ export default function EmployeeAttendanceTable({
         key: "missing",
         align: "center",
         render: renderEditable("missing_punch_count"),
+      },
+      {
+        title: fieldTitle("fieldSupplementSubmitted"),
+        dataIndex: "supplement_submitted",
+        key: "supplement_submitted",
+        align: "center",
+        render: renderEditable("supplement_submitted"),
       },
       {
         title: fieldTitle("fieldNotes"),

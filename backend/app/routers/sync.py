@@ -21,6 +21,12 @@ from app.services.dingtalk_api import DingTalkAPIError, dingtalk_corp_client
 from app.services.employee_sync import sync_employees_for_company
 from app.services.leave_overtime_sync import sync_leaves_for_company, sync_overtime_for_company
 from app.services.sync_counts import get_sync_status
+from app.services.sync_log_service import (
+    SYNC_STATUS_COMPLETED,
+    SYNC_STATUS_FAILED,
+    begin_sync_log,
+    finish_sync_log,
+)
 from app.sync_state import sync_state
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,7 @@ def sync_employees(
 
     logger.info("Employee sync requested by user_id=%s company_id=%s", current_user.id, company.id)
 
+    sync_log = begin_sync_log(db, company_id=company.id, sync_type="employees")
     try:
         summary = sync_employees_for_company(
             db,
@@ -62,11 +69,21 @@ def sync_employees(
             root_dept_id=settings.dingtalk_root_department_id,
         )
     except DingTalkAPIError as exc:
+        finish_sync_log(db, sync_log, status=SYNC_STATUS_FAILED, message=exc.message)
+        db.commit()
         logger.error("Employee sync failed: %s", exc.message)
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     now = datetime.utcnow()
     sync_state.employees_synced_at = now
+    finish_sync_log(
+        db,
+        sync_log,
+        status=SYNC_STATUS_COMPLETED,
+        records_processed=summary.added + summary.updated + summary.deactivated,
+        message=summary.message,
+    )
+    db.commit()
 
     return EmployeeSyncResponse(
         success=True,
@@ -96,14 +113,25 @@ def sync_leaves(
         payload.month,
     )
 
+    sync_log = begin_sync_log(db, company_id=company.id, sync_type="leaves")
     try:
         summary = sync_leaves_for_company(db, company, payload.year, payload.month)
     except DingTalkAPIError as exc:
+        finish_sync_log(db, sync_log, status=SYNC_STATUS_FAILED, message=exc.message)
+        db.commit()
         logger.error("Leave sync failed: %s", exc.message)
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     now = datetime.utcnow()
     sync_state.leaves_synced_at = now
+    finish_sync_log(
+        db,
+        sync_log,
+        status=SYNC_STATUS_COMPLETED,
+        records_processed=summary.employees_updated,
+        message=summary.message,
+    )
+    db.commit()
     return LeaveSyncResponse(
         success=True,
         message=summary.message,
@@ -142,14 +170,25 @@ def sync_overtime(
         payload.month,
     )
 
+    sync_log = begin_sync_log(db, company_id=company.id, sync_type="overtime")
     try:
         summary = sync_overtime_for_company(db, company, payload.year, payload.month)
     except DingTalkAPIError as exc:
+        finish_sync_log(db, sync_log, status=SYNC_STATUS_FAILED, message=exc.message)
+        db.commit()
         logger.error("Overtime sync failed: %s", exc.message)
-        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     now = datetime.utcnow()
     sync_state.overtime_synced_at = now
+    finish_sync_log(
+        db,
+        sync_log,
+        status=SYNC_STATUS_COMPLETED,
+        records_processed=summary.employees_updated,
+        message=summary.message,
+    )
+    db.commit()
     return OvertimeSyncResponse(
         success=True,
         message=summary.message,
@@ -176,12 +215,16 @@ def sync_all(
     from app.models import MonthlyAttendance
 
     logger.info("Full sync requested by user_id=%s", current_user.id)
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+
+    sync_log = begin_sync_log(db, company_id=company.id, sync_type="all")
     employee_message = "Employee sync skipped"
     leave_message = "Leave sync skipped"
     overtime_message = "Overtime sync skipped"
     records_updated = 0
-
-    company = db.query(Company).filter(Company.id == current_user.company_id).first()
 
     if current_user.role == "hr_admin" and dingtalk_corp_client.is_configured() and company:
         try:
@@ -223,16 +266,24 @@ def sync_all(
         record.last_sync_from_dingtalk = now
         record.updated_at = now
         records_updated += 1
-    db.commit()
 
     sync_state.attendance_synced_at = now
+    combined_message = (
+        f"{employee_message}. {leave_message}. {overtime_message}. "
+        f"Attendance records touched: {records_updated}."
+    )
+    finish_sync_log(
+        db,
+        sync_log,
+        status=SYNC_STATUS_COMPLETED,
+        records_processed=records_updated,
+        message=combined_message,
+    )
+    db.commit()
 
     return SyncResultResponse(
         success=True,
-        message=(
-            f"Sync completed. {employee_message}. {leave_message}. {overtime_message}. "
-            f"Attendance records touched: {records_updated}."
-        ),
+        message=f"Sync completed. {combined_message}",
         records_updated=records_updated,
         synced_at=now,
     )

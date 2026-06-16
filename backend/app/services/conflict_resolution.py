@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -295,7 +295,22 @@ def auto_resolve_conflicts(
     user: User,
     year: Optional[int] = None,
     month: Optional[int] = None,
-) -> List[Conflict]:
+) -> Tuple[List[Conflict], int, Optional[str]]:
+    """
+    Auto-resolve pending conflicts using ``users.preferences.conflict_priority``.
+
+    Returns ``(resolved_conflicts, skipped_count, resolution_method_used)``.
+    Skips conflicts when priority is ``ask`` or no global rule is configured.
+    """
+    preferences = user.preferences or {}
+    global_priority = preferences.get("conflict_priority")
+    field_rules = preferences.get("conflict_field_rules") or {}
+    if not global_priority and not field_rules:
+        raise ConflictResolutionError(
+            "No conflict_priority preference configured for this user",
+            status_code=400,
+        )
+
     query = db.query(Conflict).filter(
         Conflict.company_id == company_id,
         Conflict.status == "pending",
@@ -307,11 +322,12 @@ def auto_resolve_conflicts(
 
     pending = query.order_by(Conflict.created_at.asc()).all()
     if not pending:
-        return []
+        return [], 0, None
 
     resolved: List[Conflict] = []
     skipped = 0
     grouped: dict[tuple[int, int], List[Conflict]] = {}
+    methods_used = set()
 
     for conflict in pending:
         priority = get_conflict_priority(user, conflict.field_name)
@@ -320,6 +336,7 @@ def auto_resolve_conflicts(
             continue
 
         method = PRIORITY_TO_RESOLUTION[priority]
+        methods_used.add(method)
         resolved_conflict = resolve_conflict(
             db,
             conflict,
@@ -333,6 +350,10 @@ def auto_resolve_conflicts(
         key = (conflict.year, conflict.month)
         grouped.setdefault(key, []).append(resolved_conflict)
 
+    if not resolved:
+        db.rollback()
+        return [], skipped, None
+
     for (group_year, group_month), group_conflicts in grouped.items():
         _record_version_history(
             db,
@@ -345,6 +366,7 @@ def auto_resolve_conflicts(
         )
 
     db.commit()
+    method_used = next(iter(methods_used)) if len(methods_used) == 1 else "auto_resolve"
     logger.info(
         "Auto-resolve complete: company_id=%s resolved=%s skipped=%s pending=%s",
         company_id,
@@ -352,4 +374,4 @@ def auto_resolve_conflicts(
         skipped,
         count_pending_conflicts(db, company_id),
     )
-    return resolved
+    return resolved, skipped, method_used

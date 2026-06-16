@@ -15,7 +15,7 @@ from app.excel.attendance_export import (
     generate_attendance_excel,
 )
 from app.models import ExcelSnapshot, User
-from app.services.snapshot_service import create_snapshot
+from app.services.snapshot_service import SnapshotServiceError, create_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +61,47 @@ def prepare_excel_download(
     year: int,
     month: int,
 ) -> ExcelDownloadResult:
+    """
+    Prepare an Excel download for the given period.
+
+    1. Snapshot current monthly_attendance JSON into excel_snapshots (versioned)
+    2. Load master_template.xlsx, populate sheets from DB
+    3. Return streaming result for the HTTP response
+    """
     if month < 1 or month > 12:
         raise AttendanceExcelError("Month must be between 1 and 12")
 
-    export_result = generate_attendance_excel(db, user.company_id, year, month)
-    file_size = export_result.path.stat().st_size
+    filename = f"attendance_{year}_{month:02d}.xlsx"
 
-    snapshot_id = create_snapshot(
-        db,
-        user.company_id,
-        year,
-        month,
-        user.id,
-        dingtalk_sync_timestamp=None,
-        file_name=export_result.filename,
-        file_size=file_size,
-    )
+    try:
+        snapshot_id = create_snapshot(
+            db,
+            user.company_id,
+            year,
+            month,
+            user.id,
+            dingtalk_sync_timestamp=None,
+            file_name=filename,
+            file_size=None,
+            commit=False,
+        )
 
-    snapshot = db.query(ExcelSnapshot).filter(ExcelSnapshot.id == snapshot_id).first()
+        export_result = generate_attendance_excel(db, user.company_id, year, month)
+        file_size = export_result.path.stat().st_size
+
+        snapshot = db.query(ExcelSnapshot).filter(ExcelSnapshot.id == snapshot_id).first()
+        if snapshot:
+            snapshot.file_size = file_size
+
+        db.commit()
+        if snapshot:
+            db.refresh(snapshot)
+    except (AttendanceExcelError, SnapshotServiceError):
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
     logger.info(
         "Excel download prepared: user_id=%s company_id=%s period=%s-%02d "

@@ -4,13 +4,26 @@ from sqlalchemy.engine import Engine
 from app.database import Base, engine
 
 
+def _sqlite_table_exists(engine: Engine, table_name: str) -> bool:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
+            {"name": table_name},
+        ).first()
+    return row is not None
+
+
 def _sqlite_column_names(engine: Engine, table_name: str) -> set:
+    if not _sqlite_table_exists(engine, table_name):
+        return set()
     with engine.connect() as conn:
         rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
     return {row[1] for row in rows}
 
 
 def ensure_auth_schema() -> None:
+    Base.metadata.create_all(bind=engine)
+
     if engine.dialect.name == "sqlite":
         user_columns = _sqlite_column_names(engine, "users")
         attendance_columns = _sqlite_column_names(engine, "monthly_attendance")
@@ -39,5 +52,3 @@ def ensure_auth_schema() -> None:
                 column = f"day_{day}"
                 if column not in attendance_columns:
                     conn.execute(text(f"ALTER TABLE monthly_attendance ADD COLUMN {column} VARCHAR(50)"))
-
-    Base.metadata.create_all(bind=engine)

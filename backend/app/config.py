@@ -42,13 +42,17 @@ class Settings(BaseSettings):
     dingtalk_rate_limit_backoff_seconds: float = 1.5
 
     # DingTalk webhook callbacks (HTTP push)
+    dingtalk_webhook_secret: str = ""
     dingtalk_webhook_token: str = ""
     dingtalk_webhook_aes_key: str = ""
     dingtalk_webhook_owner_key: str = ""
 
     @property
     def dingtalk_webhook_configured(self) -> bool:
-        return bool(self.dingtalk_webhook_token and self.dingtalk_webhook_aes_key)
+        return bool(
+            self.dingtalk_webhook_secret
+            or (self.dingtalk_webhook_token and self.dingtalk_webhook_aes_key)
+        )
 
     @property
     def is_postgresql(self) -> bool:

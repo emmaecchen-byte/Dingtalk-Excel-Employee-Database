@@ -44,12 +44,14 @@ def _build_conflict_items(
     month: int,
     conflicts: List[Conflict],
 ) -> List[ConflictItem]:
+    if not conflicts:
+        return []
+
     employee_ids = {conflict.employee_id for conflict in conflicts}
     employees = {
         employee.id: employee
         for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
-    } if employee_ids else {}
-
+    }
     attendance_records = {
         record.employee_id: record
         for record in db.query(MonthlyAttendance).filter(
@@ -58,7 +60,7 @@ def _build_conflict_items(
             MonthlyAttendance.month == month,
             MonthlyAttendance.employee_id.in_(employee_ids),
         ).all()
-    } if employee_ids else {}
+    }
 
     items: List[ConflictItem] = []
     for conflict in conflicts:
@@ -134,7 +136,7 @@ def auto_resolve(
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
     try:
-        resolved = auto_resolve_conflicts(
+        resolved, skipped, method_used = auto_resolve_conflicts(
             db,
             company_id=current_user.company_id,
             user=current_user,
@@ -146,9 +148,10 @@ def auto_resolve(
 
     pending_count = count_pending_conflicts(db, current_user.company_id)
     logger.info(
-        "Auto-resolve requested by user_id=%s resolved=%s pending=%s",
+        "Auto-resolve requested by user_id=%s resolved=%s skipped=%s pending=%s",
         current_user.id,
         len(resolved),
+        skipped,
         pending_count,
     )
     return ConflictResolveResponse(
@@ -156,6 +159,8 @@ def auto_resolve(
         resolved_count=len(resolved),
         pending_conflicts_count=pending_count,
         conflict_ids=[conflict.id for conflict in resolved],
+        skipped_count=skipped,
+        resolution_method=method_used,
     )
 
 
@@ -166,6 +171,12 @@ def list_conflicts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """Return all pending conflicts for the month, joined with employee names."""
+    if year < 2000 or year > 2100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Year must be between 2000 and 2100",
+        )
     if month < 1 or month > 12:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Month must be between 1 and 12")
 

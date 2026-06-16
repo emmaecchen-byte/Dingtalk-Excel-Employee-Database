@@ -4,6 +4,7 @@ Version history listing, comparison, and restore.
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,13 +13,13 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.excel.field_utils import apply_field_value, get_field_value, normalize_numeric_value, normalize_value, snapshot_field_value
+from app.excel.field_utils import get_field_value, normalize_numeric_value, normalize_value, snapshot_field_value
 from app.models import ExcelSnapshot, ManualChange, MonthlyAttendance, User, VersionHistory
-from app.services.conflict_detection import detect_conflicts
+from app.services.conflict_detection import detect_conflicts, values_conflict
 from app.services.snapshot_service import (
     COMPARABLE_FIELDS,
     SnapshotServiceError,
-    create_snapshot,
+    create_snapshot_from_data,
     get_snapshot_diff,
 )
 
@@ -101,13 +102,16 @@ def record_snapshot_version(
     return version
 
 
-def _version_item_from_history(version: VersionHistory) -> Dict[str, Any]:
+def _version_item_from_history(version: VersionHistory, user_names: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
     summary = version.changes_summary or {}
+    created_by = version.created_by
+    if user_names and version.created_by_user_id:
+        created_by = user_names.get(version.created_by_user_id) or created_by
     return {
         "id": version.id,
         "version_number": version.version_number,
         "created_at": version.created_at.isoformat() if version.created_at else None,
-        "created_by": version.created_by,
+        "created_by": created_by,
         "summary": _summarize_changes(summary, version.version_note),
         "event_type": summary.get("event"),
         "snapshot_id": version.snapshot_id,
@@ -154,6 +158,12 @@ def list_versions(
         .all()
     )
 
+    user_ids = {version.created_by_user_id for version in versions if version.created_by_user_id}
+    user_names = {
+        user.id: user.name
+        for user in db.query(User).filter(User.id.in_(user_ids)).all()
+    } if user_ids else {}
+
     linked_snapshot_ids = {version.snapshot_id for version in versions if version.snapshot_id}
     orphan_snapshots = (
         db.query(ExcelSnapshot)
@@ -177,7 +187,7 @@ def list_versions(
         for user in db.query(User).filter(User.id.in_(downloader_ids)).all()
     } if downloader_ids else {}
 
-    items = [_version_item_from_history(version) for version in versions]
+    items = [_version_item_from_history(version, user_names) for version in versions]
     for snapshot in orphan_snapshots:
         name = downloader_names.get(snapshot.downloaded_by, "System") if snapshot.downloaded_by else "System"
         items.append(_version_item_from_snapshot(snapshot, name))
@@ -404,6 +414,43 @@ def _compute_rollback_changes(
     return changes
 
 
+def _snapshot_reference_time(snapshot: ExcelSnapshot) -> Optional[datetime]:
+    return snapshot.downloaded_at or snapshot.created_at
+
+
+def _compute_dingtalk_overwrite_warnings(
+    attendance_records: Dict[int, MonthlyAttendance],
+    snapshot: ExcelSnapshot,
+    pending_changes: List[RollbackFieldChange],
+) -> List[Dict[str, Any]]:
+    """Fields where rollback would replace values newer than the target snapshot's DingTalk sync."""
+    snapshot_time = _snapshot_reference_time(snapshot)
+    warnings: List[Dict[str, Any]] = []
+
+    for change in pending_changes:
+        record = attendance_records.get(change.employee_id)
+        if not record or not record.last_sync_from_dingtalk:
+            continue
+        if snapshot_time and record.last_sync_from_dingtalk <= snapshot_time:
+            continue
+
+        current_value = get_field_value(record, change.field_name)
+        if not values_conflict(current_value, change.rollback_value, old_value=change.current_value):
+            continue
+
+        warnings.append(
+            {
+                "employee_id": change.employee_id,
+                "employee_name": change.employee_name,
+                "field_name": change.field_name,
+                "current_value": current_value,
+                "rollback_value": change.rollback_value,
+                "last_sync_from_dingtalk": record.last_sync_from_dingtalk.isoformat(),
+            }
+        )
+    return warnings
+
+
 def preview_rollback(
     db: Session,
     company_id: int,
@@ -413,13 +460,30 @@ def preview_rollback(
     snapshot = _get_snapshot_for_version(db, company_id, version)
     changes = _compute_rollback_changes(db, company_id, snapshot)
     affected_employees = len({change.employee_id for change in changes})
+    attendance_records = {
+        record.employee_id: record
+        for record in db.query(MonthlyAttendance)
+        .filter(
+            MonthlyAttendance.company_id == company_id,
+            MonthlyAttendance.year == snapshot.year,
+            MonthlyAttendance.month == snapshot.month,
+        )
+        .all()
+    }
+    dingtalk_warnings = _compute_dingtalk_overwrite_warnings(
+        attendance_records,
+        snapshot,
+        changes,
+    )
 
     return {
         "version_id": version.id,
         "version_number": version.version_number,
         "requires_confirmation": bool(changes),
+        "requires_dingtalk_confirmation": bool(dingtalk_warnings),
         "fields_would_change": len(changes),
         "employees_affected": affected_employees,
+        "dingtalk_overwrite_warnings": dingtalk_warnings,
         "changes": [change.to_dict() for change in changes],
     }
 
@@ -431,31 +495,12 @@ def rollback_to_version(
     version_id: int,
     *,
     confirm_data_loss: bool = False,
+    confirm_dingtalk_overwrite: bool = False,
 ) -> Dict[str, Any]:
     version = _get_version_record(db, company_id, version_id)
     snapshot = _get_snapshot_for_version(db, company_id, version)
     pending_changes = _compute_rollback_changes(db, company_id, snapshot)
 
-    if pending_changes and not confirm_data_loss:
-        raise VersionServiceError(
-            "Rollback would overwrite current attendance data. "
-            "Set confirm_data_loss=true to proceed.",
-            status_code=409,
-            details={
-                "requires_confirmation": True,
-                "fields_would_change": len(pending_changes),
-                "employees_affected": len({change.employee_id for change in pending_changes}),
-                "changes": [change.to_dict() for change in pending_changes],
-            },
-        )
-
-    if not pending_changes:
-        raise VersionServiceError(
-            "Current data already matches the selected version; nothing to rollback.",
-            status_code=400,
-        )
-
-    now = datetime.utcnow()
     attendance_records = {
         record.employee_id: record
         for record in db.query(MonthlyAttendance)
@@ -466,15 +511,49 @@ def rollback_to_version(
         )
         .all()
     }
+    dingtalk_warnings = _compute_dingtalk_overwrite_warnings(
+        attendance_records,
+        snapshot,
+        pending_changes,
+    )
 
+    if pending_changes and not confirm_data_loss:
+        raise VersionServiceError(
+            "Rollback would overwrite current attendance data. "
+            "Set confirm_data_loss=true to proceed.",
+            status_code=409,
+            details={
+                "requires_confirmation": True,
+                "fields_would_change": len(pending_changes),
+                "employees_affected": len({change.employee_id for change in pending_changes}),
+                "dingtalk_overwrite_warnings": dingtalk_warnings,
+                "changes": [change.to_dict() for change in pending_changes],
+            },
+        )
+
+    if dingtalk_warnings and not confirm_dingtalk_overwrite:
+        raise VersionServiceError(
+            "Rollback would overwrite newer DingTalk data. "
+            "Set confirm_dingtalk_overwrite=true to proceed.",
+            status_code=409,
+            details={
+                "requires_dingtalk_confirmation": True,
+                "dingtalk_overwrite_warnings": dingtalk_warnings,
+                "fields_would_change": len(pending_changes),
+                "employees_affected": len({change.employee_id for change in pending_changes}),
+            },
+        )
+
+    if not pending_changes:
+        raise VersionServiceError(
+            "Current data already matches the selected version; nothing to rollback.",
+            status_code=400,
+        )
+
+    now = datetime.utcnow()
     manual_changes_batch: List[ManualChange] = []
-    applied_changes: List[Dict[str, Any]] = []
 
     for change in pending_changes:
-        record = attendance_records.get(change.employee_id)
-        if not record:
-            continue
-
         manual_change = ManualChange(
             company_id=company_id,
             year=snapshot.year,
@@ -491,10 +570,26 @@ def rollback_to_version(
         db.add(manual_change)
         manual_changes_batch.append(manual_change)
 
-        apply_field_value(record, change.field_name, change.rollback_value)
-        record.last_manual_edit = now
-        record.updated_at = now
+    db.flush()
 
+    baseline_timestamp = _snapshot_reference_time(snapshot)
+    conflict_result = detect_conflicts(
+        db,
+        company_id,
+        snapshot.year,
+        snapshot.month,
+        manual_changes_batch,
+        user=user,
+        attendance_by_employee_id=attendance_records,
+        baseline_timestamp=baseline_timestamp,
+        auto_apply_resolutions=True,
+        respect_user_priority=False,
+    )
+
+    applied_changes: List[Dict[str, Any]] = []
+    for change, manual_change in zip(pending_changes, manual_changes_batch):
+        if not manual_change.merged_to_truth:
+            continue
         applied_changes.append(
             {
                 "employee_id": change.employee_id,
@@ -505,48 +600,31 @@ def rollback_to_version(
             }
         )
 
-    db.flush()
+    rollback_data = copy.deepcopy(snapshot.data_snapshot or {})
+    rollback_data["exported_at"] = now.isoformat()
+    rollback_data["rollback_from_snapshot_id"] = snapshot.id
+    rollback_data["rollback_from_version"] = version.version_number
 
-    conflict_result = detect_conflicts(
-        db,
-        company_id,
-        snapshot.year,
-        snapshot.month,
-        manual_changes_batch,
-        user=user,
-        attendance_by_employee_id=attendance_records,
-        baseline_timestamp=now,
-        auto_apply_resolutions=False,
-    )
-
-    for manual_change in manual_changes_batch:
-        key = (manual_change.employee_id, manual_change.field_name)
-        conflict_keys = {
-            (conflict.employee_id, conflict.field_name) for conflict in conflict_result.conflicts
-        }
-        if key not in conflict_keys:
-            manual_change.merged_to_truth = True
-            manual_change.merged_at = now
-
-    new_snapshot_id = create_snapshot(
+    new_snapshot_id = create_snapshot_from_data(
         db,
         company_id,
         snapshot.year,
         snapshot.month,
         user.id,
-        snapshot.dingtalk_sync_timestamp,
+        rollback_data,
+        dingtalk_sync_timestamp=snapshot.dingtalk_sync_timestamp,
         file_name=f"rollback_v{version.version_number}.xlsx",
-        record_version_history=False,
         commit=False,
     )
     for manual_change in manual_changes_batch:
         manual_change.snapshot_id = new_snapshot_id
 
+    new_version_number = _next_version_number(db, company_id, snapshot.year, snapshot.month)
     rollback_version_row = VersionHistory(
         company_id=company_id,
         year=snapshot.year,
         month=snapshot.month,
-        version_number=_next_version_number(db, company_id, snapshot.year, snapshot.month),
+        version_number=new_version_number,
         created_by="rollback",
         created_by_user_id=user.id,
         snapshot_id=new_snapshot_id,
@@ -559,9 +637,10 @@ def rollback_to_version(
             "employees_affected": len({item["employee_id"] for item in applied_changes}),
             "manual_changes_created": len(manual_changes_batch),
             "conflicts_created": conflict_result.conflicts_created,
+            "dingtalk_overwrite_count": len(dingtalk_warnings),
             "changes": applied_changes,
         },
-        version_note=f"Rollback to version v{version.version_number}",
+        version_note=f"Rolled back to version {version.version_number}",
     )
     db.add(rollback_version_row)
     db.commit()
@@ -577,6 +656,7 @@ def rollback_to_version(
 
     return {
         "success": True,
+        "new_version": rollback_version_row.version_number,
         "version_id": rollback_version_row.id,
         "snapshot_id": new_snapshot_id,
         "rolled_back_to_version": version.version_number,
@@ -621,6 +701,7 @@ def restore_version(
         user,
         version_id,
         confirm_data_loss=True,
+        confirm_dingtalk_overwrite=True,
     )
     return {
         "success": True,

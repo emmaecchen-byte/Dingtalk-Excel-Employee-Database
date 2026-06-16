@@ -23,7 +23,6 @@ import {
   UserAddOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { downloadPdf } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import CloneMonthModal from "../components/CloneMonthModal";
 import ConflictResolutionModal from "../components/ConflictResolutionModal";
@@ -37,7 +36,17 @@ import { useLanguage } from "../i18n/LanguageContext";
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 
-const YEARS = [2025, 2026, 2027];
+function buildYearOptions(currentYear: number, language: "zh" | "en", yearSuffix: string) {
+  const start = currentYear - 2;
+  const end = currentYear + 2;
+  return Array.from({ length: end - start + 1 }, (_, index) => {
+    const value = start + index;
+    return {
+      value,
+      label: language === "zh" ? `${value}${yearSuffix}` : String(value),
+    };
+  });
+}
 
 const MONTH_NAMES: Record<"zh" | "en", string[]> = {
   zh: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
@@ -63,11 +72,12 @@ function DashboardContent() {
     setMonth,
     data,
     stats,
+    isLoading,
     attendanceLoading,
-    summaryLoading,
     syncing,
     uploading,
     downloading,
+    exportingPdf,
     search,
     setSearch,
     department,
@@ -83,6 +93,7 @@ function DashboardContent() {
     refreshAll,
     handleSync,
     handleDownloadExcel,
+    handleExportPdf,
     triggerUpload,
     handleDataChange,
     syncRefreshToken,
@@ -107,11 +118,7 @@ function DashboardContent() {
   );
 
   const yearOptions = useMemo(
-    () =>
-      YEARS.map((value) => ({
-        value,
-        label: language === "zh" ? `${value}${t("yearSuffix")}` : String(value),
-      })),
+    () => buildYearOptions(new Date().getFullYear(), language, t("yearSuffix")),
     [language, t]
   );
 
@@ -182,7 +189,17 @@ function DashboardContent() {
               </Button>
             )}
             {canSync && (
-              <Button icon={<FilePdfOutlined />} onClick={() => downloadPdf(year, month)} disabled={!data}>
+              <Button
+                icon={<FilePdfOutlined />}
+                loading={exportingPdf}
+                onClick={() => void handleExportPdf(false)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  void handleExportPdf(true);
+                }}
+                disabled={!data}
+                title={t("exportPdfHint")}
+              >
                 {t("exportPdf")}
               </Button>
             )}
@@ -211,7 +228,7 @@ function DashboardContent() {
           />
         )}
 
-        <SummaryCards stats={stats} loading={summaryLoading} />
+        <SummaryCards stats={stats} loading={attendanceLoading || isLoading} />
 
         <Card
           title={t("employeeList")}
@@ -291,6 +308,7 @@ function DashboardContent() {
         onCloned={(targetYear, targetMonth) => {
           setYear(targetYear);
           setMonth(targetMonth);
+          void refreshAll();
         }}
       />
     </Layout>

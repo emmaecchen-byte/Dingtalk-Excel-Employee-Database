@@ -16,29 +16,22 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.excel.attendance_parser import ParsedWorkbook, parse_attendance_workbook
 from app.excel.field_utils import (
-    apply_field_value,
     normalize_numeric_value,
     normalize_value,
     snapshot_field_value,
 )
-from app.services.conflict_detection import (
-    PRIORITY_DINGTALK,
-    dingtalk_is_newer_than_change,
-    detect_conflicts,
-    get_conflict_priority,
-)
+from app.services.conflict_detection import detect_conflicts
 from app.models import ExcelSnapshot, ManualChange, MonthlyAttendance, User
 
 logger = logging.getLogger(__name__)
 
-TRACKED_FIELDS = [f"day_{day}" for day in range(1, 32)] + [
-    "anomaly_summary",
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+# Fields compared against the last excel_snapshots row for upload diffing.
+UPLOAD_COMPARISON_FIELDS = [f"day_{day}" for day in range(1, 32)] + [
     "supplement_submitted",
     "notes",
-    "total_overtime_hours",
 ]
-
-UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 class ExcelUploadError(Exception):
@@ -68,6 +61,9 @@ class ExcelUploadResult:
     conflicts_created: int
     employees_modified: int
     pending_conflicts_count: int
+    auto_merged: int = 0
+    has_conflicts: bool = False
+    conflicts_list: List[dict] = field(default_factory=list)
     changes: List[DetectedChange] = field(default_factory=list)
 
 
@@ -109,7 +105,7 @@ def _get_latest_snapshot(
     )
     if not snapshot:
         raise ExcelUploadError(
-            "No Excel snapshot found for this period. Download the template first.",
+            "No snapshot found. Please download the original Excel first.",
             status_code=404,
         )
     return snapshot
@@ -140,7 +136,7 @@ def _diff_employee(
     employee_name: str,
 ) -> List[DetectedChange]:
     changes: List[DetectedChange] = []
-    for field_name in TRACKED_FIELDS:
+    for field_name in UPLOAD_COMPARISON_FIELDS:
         old_value = snapshot_field_value(snapshot_employee, field_name)
         if field_name.startswith("day_"):
             daily = uploaded_employee.get("daily_status") or {}
@@ -257,9 +253,10 @@ def process_excel_upload(
         year,
         month,
         manual_changes_batch,
-        user=user,
         attendance_by_employee_id=records_by_employee_id,
         baseline_timestamp=baseline_timestamp,
+        auto_apply_resolutions=True,
+        respect_user_priority=False,
     )
 
     conflict_keys = {
@@ -271,30 +268,10 @@ def process_excel_upload(
     }
 
     for manual_change, change in change_pairs:
-        record = records_by_employee_id[manual_change.employee_id]
         key = (manual_change.employee_id, manual_change.field_name)
-
         if key in conflict_keys:
             change.conflict = True
             change.conflict_id = conflict_id_by_key.get(key)
-            continue
-
-        if manual_change.merged_to_truth:
-            continue
-
-        priority = get_conflict_priority(user, manual_change.field_name)
-        if priority == PRIORITY_DINGTALK and dingtalk_is_newer_than_change(
-            record,
-            manual_change,
-            baseline_timestamp=baseline_timestamp,
-        ):
-            continue
-
-        apply_field_value(record, manual_change.field_name, manual_change.new_value)
-        manual_change.merged_to_truth = True
-        manual_change.merged_at = now
-        record.last_manual_edit = now
-        record.updated_at = now
 
     db.commit()
 
@@ -319,6 +296,9 @@ def process_excel_upload(
         conflicts_created=conflict_result.conflicts_created,
         employees_modified=len(modified_employees),
         pending_conflicts_count=conflict_result.pending_conflicts_count,
+        auto_merged=conflict_result.auto_merged,
+        has_conflicts=conflict_result.conflicts_created > 0,
+        conflicts_list=conflict_result.conflicts_list,
         changes=all_changes,
     )
 
@@ -335,12 +315,21 @@ async def handle_excel_upload(
 
     temp_path = await _save_upload_to_tempfile(upload)
     try:
-        parsed = parse_attendance_workbook(temp_path, year=year, month=month)
+        try:
+            parsed = parse_attendance_workbook(temp_path, year=year, month=month)
+        except ValueError as exc:
+            raise ExcelUploadError(str(exc)) from exc
+        except Exception as exc:
+            logger.warning("Failed to parse uploaded workbook: %s", exc)
+            raise ExcelUploadError(
+                "Invalid or malformed Excel file. Ensure it is a valid .xlsx workbook "
+                "with the 月度汇总 worksheet.",
+            ) from exc
+
         if not parsed.employees:
-            raise ExcelUploadError("No employee rows found in uploaded workbook")
+            raise ExcelUploadError("No employee rows found in the 月度汇总 worksheet")
+
         return process_excel_upload(db, user, year, month, parsed)
-    except ValueError as exc:
-        raise ExcelUploadError(str(exc)) from exc
     finally:
         try:
             os.unlink(temp_path)

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/versions", tags=["versions"])
 
 HR_ROLES = ["hr_admin", "hr_viewer"]
+ADMIN_ROLES = ["hr_admin"]
 
 
 def _raise_version_error(exc: VersionServiceError) -> None:
@@ -83,7 +84,7 @@ def restore_version_body(
 def get_rollback_preview(
     version_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(HR_ROLES)),
+    current_user: User = Depends(require_roles(ADMIN_ROLES)),
 ):
     try:
         return preview_rollback(db, current_user.company_id, version_id)
@@ -96,7 +97,7 @@ def rollback_version(
     version_id: int,
     payload: VersionRollbackRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(HR_ROLES)),
+    current_user: User = Depends(require_roles(ADMIN_ROLES)),
 ):
     try:
         result = rollback_to_version(
@@ -105,6 +106,7 @@ def rollback_version(
             current_user,
             version_id,
             confirm_data_loss=payload.confirm_data_loss,
+            confirm_dingtalk_overwrite=payload.confirm_dingtalk_overwrite,
         )
     except VersionServiceError as exc:
         _raise_version_error(exc)
@@ -150,6 +152,12 @@ def get_version_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """List version history for a month, sorted by version_number descending."""
+    if year < 2000 or year > 2100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Year must be between 2000 and 2100",
+        )
     if month < 1 or month > 12:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Month must be between 1 and 12")
 

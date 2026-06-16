@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Checkbox, Col, Form, Modal, Row, Select, Typography, message } from "antd";
-import { cloneMonth, MonthCloneCopyOptions } from "../api";
+import { Checkbox, Col, Divider, Form, Modal, Row, Select, Typography, message } from "antd";
+import { cloneMonth, getApiErrorMessage, MonthCloneCopyOptions } from "../api";
 import { useLanguage } from "../i18n/LanguageContext";
 
 const { Text } = Typography;
-
-const YEARS = [2025, 2026, 2027, 2028];
 
 interface CloneMonthModalProps {
   open: boolean;
@@ -23,6 +21,15 @@ const DEFAULT_OPTIONS: MonthCloneCopyOptions = {
   reset_anomalies: true,
 };
 
+function buildYearOptions(currentYear: number) {
+  const start = currentYear - 2;
+  const end = currentYear + 2;
+  return Array.from({ length: end - start + 1 }, (_, index) => {
+    const value = start + index;
+    return { value, label: String(value) };
+  });
+}
+
 export default function CloneMonthModal({
   open,
   sourceYear,
@@ -32,14 +39,21 @@ export default function CloneMonthModal({
 }: CloneMonthModalProps) {
   const { language, t } = useLanguage();
   const [saving, setSaving] = useState(false);
+  const [fromYear, setFromYear] = useState(sourceYear);
+  const [fromMonth, setFromMonth] = useState(sourceMonth);
   const [targetYear, setTargetYear] = useState(sourceYear);
   const [targetMonth, setTargetMonth] = useState(sourceMonth === 12 ? 1 : sourceMonth + 1);
   const [options, setOptions] = useState<MonthCloneCopyOptions>(DEFAULT_OPTIONS);
 
   useEffect(() => {
     if (open) {
+      setFromYear(sourceYear);
+      setFromMonth(sourceMonth);
       setTargetYear(sourceYear);
       setTargetMonth(sourceMonth === 12 ? 1 : sourceMonth + 1);
+      if (sourceMonth === 12) {
+        setTargetYear(sourceYear + 1);
+      }
       setOptions(DEFAULT_OPTIONS);
     }
   }, [open, sourceYear, sourceMonth]);
@@ -53,22 +67,24 @@ export default function CloneMonthModal({
     [language]
   );
 
-  const yearOptions = useMemo(
-    () => YEARS.map((value) => ({ value, label: String(value) })),
-    []
-  );
+  const yearOptions = useMemo(() => buildYearOptions(new Date().getFullYear()), []);
 
   const handleSubmit = async () => {
-    if (sourceYear === targetYear && sourceMonth === targetMonth) {
+    if (fromYear === targetYear && fromMonth === targetMonth) {
       message.error(t("cloneMonthSamePeriod"));
+      return;
+    }
+
+    if (!options.copy_employees) {
+      message.error(t("cloneOptionEmployees"));
       return;
     }
 
     setSaving(true);
     try {
       const result = await cloneMonth({
-        source_year: sourceYear,
-        source_month: sourceMonth,
+        source_year: fromYear,
+        source_month: fromMonth,
         target_year: targetYear,
         target_month: targetMonth,
         copy_options: options,
@@ -82,9 +98,8 @@ export default function CloneMonthModal({
       );
       onCloned(result.target_year, result.target_month);
       onClose();
-    } catch (error: unknown) {
-      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-      message.error(typeof detail === "string" ? detail : t("cloneMonthFailed"));
+    } catch (error) {
+      message.error(getApiErrorMessage(error, t("cloneMonthFailed")));
     } finally {
       setSaving(false);
     }
@@ -99,19 +114,34 @@ export default function CloneMonthModal({
       title={t("cloneMonthTitle")}
       open={open}
       onCancel={onClose}
-      onOk={handleSubmit}
+      onOk={() => void handleSubmit()}
       confirmLoading={saving}
       okText={t("cloneMonthConfirm")}
       cancelText={t("cancel")}
-      width={560}
+      width={600}
       destroyOnClose
     >
       <Form layout="vertical">
         <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-          {t("cloneMonthDescription", { year: sourceYear, month: sourceMonth })}
+          {t("cloneMonthDescription", { year: fromYear, month: fromMonth })}
         </Text>
 
-        <Row gutter={16}>
+        <Text strong>{t("cloneMonthSource")}</Text>
+        <Row gutter={16} style={{ marginTop: 8, marginBottom: 16 }}>
+          <Col span={12}>
+            <Form.Item label={t("cloneMonthTargetYear")}>
+              <Select value={fromYear} onChange={setFromYear} options={yearOptions} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label={t("cloneMonthTargetMonth")}>
+              <Select value={fromMonth} onChange={setFromMonth} options={monthOptions} />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Text strong>{t("cloneMonthTarget")}</Text>
+        <Row gutter={16} style={{ marginTop: 8 }}>
           <Col span={12}>
             <Form.Item label={t("cloneMonthTargetYear")}>
               <Select value={targetYear} onChange={setTargetYear} options={yearOptions} />
@@ -123,6 +153,8 @@ export default function CloneMonthModal({
             </Form.Item>
           </Col>
         </Row>
+
+        <Divider />
 
         <Form.Item label={t("cloneMonthOptions")}>
           <Checkbox
@@ -138,14 +170,6 @@ export default function CloneMonthModal({
             disabled={!options.copy_employees}
           >
             {t("cloneOptionAttendance")}
-          </Checkbox>
-          <br />
-          <Checkbox
-            checked={options.keep_formulas}
-            onChange={(event) => updateOption("keep_formulas", event.target.checked)}
-            disabled={!options.copy_employees || !options.keep_attendance_data}
-          >
-            {t("cloneOptionFormulas")}
           </Checkbox>
           <br />
           <Checkbox

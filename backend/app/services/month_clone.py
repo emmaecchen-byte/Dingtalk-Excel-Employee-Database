@@ -244,17 +244,19 @@ def clone_month(
             status_code=409,
         )
 
-    source_records: List[MonthlyAttendance] = []
-    if copy_options.copy_employees:
-        source_records = _load_source_records(db, company_id, source_year, source_month)
-        if not source_records:
-            raise MonthCloneError(
-                f"No attendance data for source month {source_year}-{source_month:02d}",
-                status_code=404,
-            )
+    if not copy_options.copy_employees:
+        raise MonthCloneError("copy_employees must be enabled to clone a month")
+
+    source_records = _load_source_records(db, company_id, source_year, source_month)
+    if not source_records:
+        raise MonthCloneError(
+            f"No attendance data for source month {source_year}-{source_month:02d}",
+            status_code=404,
+        )
 
     now = datetime.utcnow()
     employees_copied = 0
+    first_target_record_id: Optional[int] = None
 
     for source in source_records:
         target_record = _build_target_record(
@@ -266,6 +268,9 @@ def clone_month(
             now=now,
         )
         db.add(target_record)
+        db.flush()
+        if first_target_record_id is None:
+            first_target_record_id = target_record.id
         employees_copied += 1
 
     db.flush()
@@ -299,7 +304,7 @@ def clone_month(
             year=target_year,
             month=target_month,
             version_number=version_number,
-            created_by=user.name,
+            created_by="month_clone",
             created_by_user_id=user.id,
             snapshot_id=snapshot_id,
             changes_summary={
@@ -341,7 +346,7 @@ def clone_month(
 
     return {
         "success": True,
-        "target_month_id": version_id or 0,
+        "target_month_id": version_id or first_target_record_id or 0,
         "employees_copied": employees_copied,
         "snapshot_id": snapshot_id,
         "version_number": version_number,

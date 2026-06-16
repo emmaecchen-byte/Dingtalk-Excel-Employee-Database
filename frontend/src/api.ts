@@ -70,6 +70,9 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
     if (typeof detail === "string") {
       return detail;
     }
+    if (typeof detail === "object" && detail && "message" in detail) {
+      return String(detail.message);
+    }
     if (Array.isArray(detail) && detail.length > 0) {
       const first = detail[0];
       if (typeof first === "object" && first && "msg" in first) {
@@ -135,15 +138,31 @@ export async function downloadExcel(year: number, month: number) {
   window.URL.revokeObjectURL(url);
 }
 
+export interface ExcelUploadConflictPreview {
+  id: number;
+  employee_id: number;
+  employee_name: string;
+  field_name: string;
+  dingtalk_value?: string;
+  manual_value?: string;
+  status: string;
+}
+
 export interface ExcelUploadResponse {
   success: boolean;
   year: number;
   month: number;
   snapshot_id: number;
+  total_changes: number;
+  employees_affected: number;
   changes_detected: number;
-  conflicts_created: number;
   employees_modified: number;
+  conflicts_created: number;
+  auto_merged: number;
+  has_conflicts: boolean;
+  conflicts_list: ExcelUploadConflictPreview[];
   pending_conflicts_count: number;
+  changes_list: ExcelFieldChange[];
   changes: ExcelFieldChange[];
 }
 
@@ -157,28 +176,50 @@ export interface ExcelFieldChange {
   conflict_id?: number | null;
 }
 
-export async function uploadExcel(year: number, month: number, file: File) {
+export async function uploadExcel(
+  year: number,
+  month: number,
+  file: File,
+  onProgress?: (percent: number) => void
+) {
   const formData = new FormData();
   formData.append("year", String(year));
   formData.append("month", String(month));
   formData.append("file", file);
   const { data } = await client.post<ExcelUploadResponse>("/excel/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: (event) => {
+      if (!event.total) {
+        return;
+      }
+      onProgress?.(Math.round((event.loaded * 100) / event.total));
+    },
   });
   return data;
 }
 
-export async function downloadPdf(year: number, month: number) {
+export async function downloadPdf(
+  year: number,
+  month: number,
+  options: { openInNewTab?: boolean } = {}
+) {
   const response = await client.get(`/attendance/export/pdf/${year}/${month}`, {
     responseType: "blob",
   });
   const blob = new Blob([response.data], { type: "application/pdf" });
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `attendance_${year}_${String(month).padStart(2, "0")}.pdf`;
-  link.click();
-  window.URL.revokeObjectURL(url);
+  const filename = `attendance_${year}_${String(month).padStart(2, "0")}.pdf`;
+
+  if (options.openInNewTab) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  } else {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+  }
+
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
 }
 
 export interface MonthCloneCopyOptions {
@@ -346,12 +387,23 @@ export interface VersionDetailResponse {
   data_snapshot?: Record<string, unknown>;
 }
 
+export interface VersionRollbackDingtalkWarning {
+  employee_id: number;
+  employee_name: string;
+  field_name: string;
+  current_value: string;
+  rollback_value: string;
+  last_sync_from_dingtalk?: string;
+}
+
 export interface VersionRollbackPreviewResponse {
   version_id: number;
   version_number: number;
   requires_confirmation: boolean;
+  requires_dingtalk_confirmation: boolean;
   fields_would_change: number;
   employees_affected: number;
+  dingtalk_overwrite_warnings: VersionRollbackDingtalkWarning[];
   changes: {
     employee_id: number;
     employee_name: string;
@@ -363,6 +415,7 @@ export interface VersionRollbackPreviewResponse {
 
 export interface VersionRollbackResponse {
   success: boolean;
+  new_version: number;
   version_id: number;
   snapshot_id: number;
   rolled_back_to_version: number;
@@ -408,9 +461,14 @@ export async function previewVersionRollback(versionId: number) {
   return data;
 }
 
-export async function rollbackVersion(versionId: number, confirmDataLoss = false) {
+export async function rollbackVersion(
+  versionId: number,
+  options: { confirmDataLoss?: boolean; confirmDingtalkOverwrite?: boolean } = {}
+) {
+  const { confirmDataLoss = false, confirmDingtalkOverwrite = false } = options;
   const { data } = await client.post<VersionRollbackResponse>(`/versions/${versionId}/rollback`, {
     confirm_data_loss: confirmDataLoss,
+    confirm_dingtalk_overwrite: confirmDingtalkOverwrite,
   });
   return data;
 }

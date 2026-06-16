@@ -215,6 +215,70 @@ def create_snapshot(
     return snapshot.id
 
 
+def create_snapshot_from_data(
+    db: Session,
+    company_id: int,
+    year: int,
+    month: int,
+    downloaded_by: int,
+    data_snapshot: Dict[str, Any],
+    *,
+    dingtalk_sync_timestamp: Optional[datetime] = None,
+    file_name: Optional[str] = None,
+    file_size: Optional[int] = None,
+    commit: bool = True,
+) -> int:
+    """
+    Persist a pre-built data_snapshot as a new excel_snapshots row.
+
+    Used when restoring a known snapshot payload (e.g. version rollback) while
+    incrementing snapshot_version and linking previous_snapshot_id.
+    """
+    if month < 1 or month > 12:
+        raise SnapshotServiceError("Month must be between 1 and 12")
+
+    previous = _get_latest_snapshot(db, company_id, year, month)
+    new_version = (previous.snapshot_version + 1) if previous else 1
+    now = datetime.utcnow()
+
+    snapshot = ExcelSnapshot(
+        company_id=company_id,
+        year=year,
+        month=month,
+        snapshot_version=new_version,
+        downloaded_at=now,
+        downloaded_by=downloaded_by,
+        file_name=file_name,
+        file_size=file_size,
+        dingtalk_sync_timestamp=dingtalk_sync_timestamp,
+        data_snapshot=data_snapshot,
+        previous_snapshot_id=previous.id if previous else None,
+        status="active",
+    )
+    db.add(snapshot)
+
+    if previous and previous.status == "active":
+        previous.status = "superseded"
+
+    db.flush()
+
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    db.refresh(snapshot)
+
+    logger.info(
+        "Snapshot created from data: id=%s company_id=%s period=%s-%02d version=v%s",
+        snapshot.id,
+        company_id,
+        year,
+        month,
+        new_version,
+    )
+    return snapshot.id
+
+
 @dataclass
 class SnapshotFieldDiff:
     employee_id: int
