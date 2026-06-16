@@ -19,9 +19,9 @@ services:
       timeout: 5s
       retries: 10
 
-  # Optional one-shot demo seed (run: docker compose --profile seed up seed)
+  # One-shot demo seed against Postgres (profile: seed)
   seed:
-    profiles: ["seed"]
+    profiles: ["seed", "demo"]
     image: python:3.12-slim
     container_name: dingtalk-attendance-seed
     working_dir: /app
@@ -43,3 +43,10 @@ services:
 
 volumes:
   postgres_data:
+
+# Usage:
+#   npm run seed                          # SQLite/local Python seed
+#   npm run docker:up                     # Postgres only
+#   npm run docker:seed                   # Postgres + one-shot seed
+#   npm run docker:up:seed                # Postgres (detached) + seed
+#   docker compose --profile demo up -d   # Postgres + auto seed on first start

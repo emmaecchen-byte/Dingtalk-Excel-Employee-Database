@@ -14,7 +14,6 @@
     "antd": "^5.22.5",
     "axios": "^1.7.9",
     "react": "^18.3.1",
-    "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.4"
   },

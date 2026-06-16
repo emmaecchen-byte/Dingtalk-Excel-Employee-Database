@@ -13,17 +13,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MonthlyAttendanceResponse,
   MonthlyStats,
-  downloadExcel,
   downloadPdf,
   fetchAttendance,
+} from "../api";
+import {
+  downloadExcel,
   getApiErrorMessage,
   syncAll,
   uploadExcel,
-} from "../api";
+  type ExcelUploadResponse,
+} from "../services/api";
 import { calculateStatsFromEmployees } from "../lib/attendanceStats";
 import { useLanguage } from "../i18n/LanguageContext";
 import { dashboardKeys } from "../hooks/dashboardKeys";
 import { useSyncStatusQuery } from "../hooks/useSyncStatus";
+import UploadSummaryModal from "../components/UploadSummaryModal";
 
 export type AnomalyFilter = "all" | "issues_only";
 
@@ -44,6 +48,7 @@ interface DashboardContextValue {
   isLoading: boolean;
   attendanceLoading: boolean;
   syncing: boolean;
+  syncStatusMessage: string | null;
   uploading: boolean;
   uploadProgress: number;
   downloading: boolean;
@@ -90,6 +95,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [syncRefreshToken, setSyncRefreshToken] = useState(0);
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadSummaryOpen, setUploadSummaryOpen] = useState(false);
+  const [uploadSummaryResult, setUploadSummaryResult] = useState<ExcelUploadResponse | null>(null);
+  const [syncStatusMessage, setSyncStatusMessage] = useState<string | null>(null);
   const [localData, setLocalData] = useState<MonthlyAttendanceResponse | null>(null);
 
   const bumpSyncRefresh = useCallback(() => {
@@ -158,18 +166,29 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   }, [queryClient, selectedYear, selectedMonth, bumpSyncRefresh]);
 
   const syncMutation = useMutation({
-    mutationFn: syncAll,
+    mutationFn: () => {
+      setSyncStatusMessage(t("syncInProgress"));
+      return syncAll(selectedYear, selectedMonth);
+    },
     onSuccess: async (result) => {
+      setSyncStatusMessage(result.message ?? t("syncSuccess"));
       message.success(result.message ?? t("syncSuccess"));
       await refreshAll();
     },
     onError: (error) => {
+      setSyncStatusMessage(null);
       message.error(getApiErrorMessage(error, t("syncFailed")));
+    },
+    onSettled: () => {
+      window.setTimeout(() => setSyncStatusMessage(null), 4000);
     },
   });
 
   const downloadMutation = useMutation({
     mutationFn: () => downloadExcel(selectedYear, selectedMonth),
+    onSuccess: () => {
+      message.success(t("downloadExcelSuccess"));
+    },
     onError: (error) => {
       message.error(getApiErrorMessage(error, t("downloadExcelFailed")));
     },
@@ -189,19 +208,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     mutationFn: (file: File) =>
       uploadExcel(selectedYear, selectedMonth, file, (percent) => setUploadProgress(percent)),
     onSuccess: async (result) => {
-      message.success(
-        t("uploadExcelSuccess", {
-          changes: result.changes_detected,
-          conflicts: result.conflicts_created,
-        })
-      );
+      setUploadSummaryResult(result);
+      setUploadSummaryOpen(true);
       await refreshAll();
-      if (result.has_conflicts || result.conflicts_created > 0) {
-        setConflictModalOpen(true);
-      }
     },
     onError: (error) => {
-      message.error(getApiErrorMessage(error, t("uploadExcelFailed")));
+      const fallback = error instanceof Error && error.message.includes(".xlsx")
+        ? t("uploadXlsxOnly")
+        : t("uploadExcelFailed");
+      message.error(getApiErrorMessage(error, fallback));
     },
     onSettled: () => {
       setUploadProgress(0);
@@ -228,9 +243,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const handleUploadExcel = useCallback(
     async (file: File) => {
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        message.error(t("uploadXlsxOnly"));
+        return;
+      }
       await uploadMutation.mutateAsync(file);
     },
-    [uploadMutation]
+    [uploadMutation, t]
   );
 
   const handleDataChange = useCallback((nextData: MonthlyAttendanceResponse) => {
@@ -266,6 +285,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       isLoading,
       attendanceLoading: attendanceQuery.isLoading || attendanceQuery.isFetching,
       syncing: syncMutation.isPending,
+      syncStatusMessage,
       uploading: uploadMutation.isPending,
       uploadProgress,
       downloading: downloadMutation.isPending,
@@ -304,6 +324,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       attendanceQuery.isLoading,
       attendanceQuery.isFetching,
       syncMutation.isPending,
+      syncStatusMessage,
       uploadMutation.isPending,
       uploadProgress,
       downloadMutation.isPending,
@@ -333,7 +354,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       <input
         ref={uploadInputRef}
         type="file"
-        accept=".xlsx,.xls"
+        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         hidden
         onChange={(event) => {
           const file = event.target.files?.[0];
@@ -342,7 +363,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           }
         }}
       />
-      {uploadMutation.isPending && uploadProgress > 0 && (
+      {uploadMutation.isPending && (
         <div
           style={{
             position: "fixed",
@@ -350,13 +371,25 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
             left: 0,
             right: 0,
             zIndex: 1000,
-            padding: "0 24px",
+            padding: "8px 24px",
             background: "rgba(255,255,255,0.95)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
           }}
         >
-          <Progress percent={uploadProgress} status="active" showInfo />
+          <Progress
+            percent={uploadProgress}
+            status="active"
+            showInfo
+            format={(percent) => `${percent ?? 0}%`}
+          />
         </div>
       )}
+      <UploadSummaryModal
+        open={uploadSummaryOpen}
+        result={uploadSummaryResult}
+        onClose={() => setUploadSummaryOpen(false)}
+        onResolveConflicts={() => setConflictModalOpen(true)}
+      />
       {children}
     </DashboardContext.Provider>
   );

@@ -216,9 +216,12 @@ class ConflictAutoResolveRequest(BaseModel):
 
 class ConflictResolveResponse(BaseModel):
     success: bool
-    resolved_count: int
-    pending_conflicts_count: int
-    conflict_ids: List[int]
+    resolved: int = 0
+    failed: int = 0
+    remaining: int = 0
+    resolved_count: int = 0
+    pending_conflicts_count: int = 0
+    conflict_ids: List[int] = Field(default_factory=list)
     skipped_count: int = 0
     resolution_method: Optional[str] = None
 
@@ -310,6 +313,7 @@ class VersionDetailResponse(BaseModel):
     version_note: Optional[str] = None
     snapshot_id: Optional[int] = None
     snapshot_version: Optional[int] = None
+    snapshot_data: Optional[dict] = None
     data_snapshot: Optional[dict] = None
 
 

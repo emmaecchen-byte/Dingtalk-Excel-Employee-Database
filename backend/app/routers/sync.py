@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
@@ -209,6 +209,7 @@ def sync_overtime(
 
 @router.post("/all", response_model=SyncResultResponse)
 def sync_all(
+    payload: Optional[MonthSyncRequest] = Body(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
@@ -226,6 +227,10 @@ def sync_all(
     overtime_message = "Overtime sync skipped"
     records_updated = 0
 
+    now = datetime.utcnow()
+    sync_year = payload.year if payload else now.year
+    sync_month = payload.month if payload else now.month
+
     if current_user.role == "hr_admin" and dingtalk_corp_client.is_configured() and company:
         try:
             summary = sync_employees_for_company(
@@ -239,27 +244,27 @@ def sync_all(
             employee_message = f"Employee sync failed: {exc.message}"
 
     if dingtalk_corp_client.is_configured() and company:
-        now = datetime.utcnow()
-        default_year = now.year
-        default_month = now.month
         try:
-            leave_summary = sync_leaves_for_company(db, company, default_year, default_month)
+            leave_summary = sync_leaves_for_company(db, company, sync_year, sync_month)
             leave_message = leave_summary.message
             sync_state.leaves_synced_at = now
         except DingTalkAPIError as exc:
             leave_message = f"Leave sync failed: {exc.message}"
 
         try:
-            overtime_summary = sync_overtime_for_company(db, company, default_year, default_month)
+            overtime_summary = sync_overtime_for_company(db, company, sync_year, sync_month)
             overtime_message = overtime_summary.message
             sync_state.overtime_synced_at = now
         except DingTalkAPIError as exc:
             overtime_message = f"Overtime sync failed: {exc.message}"
 
-    now = datetime.utcnow()
     records = (
         db.query(MonthlyAttendance)
-        .filter(MonthlyAttendance.company_id == current_user.company_id)
+        .filter(
+            MonthlyAttendance.company_id == current_user.company_id,
+            MonthlyAttendance.year == sync_year,
+            MonthlyAttendance.month == sync_month,
+        )
         .all()
     )
     for record in records:

@@ -10,8 +10,10 @@ from app.database import SessionLocal
 from app.db_upgrade import ensure_auth_schema
 from app.seed import seed_database
 from app import routes
+from app.routers import clone as clone_router
 from app.routers import conflicts as conflicts_router
 from app.routers import sync as sync_router
+from app.routers import excel as excel_router
 from app.routers import versions as versions_router
 from app.routers import webhooks as webhooks_router
 
@@ -46,5 +48,7 @@ app.include_router(auth_router)
 app.include_router(sync_router.router)
 app.include_router(conflicts_router.router)
 app.include_router(versions_router.router)
+app.include_router(excel_router.router)
+app.include_router(clone_router.router)
 app.include_router(webhooks_router.router)
 app.include_router(routes.router)

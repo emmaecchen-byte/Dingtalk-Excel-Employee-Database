@@ -1,5 +1,15 @@
-import axios from "axios";
 import client from "./auth/api";
+
+export {
+  downloadExcel,
+  getApiErrorMessage,
+  syncAll,
+  uploadExcel,
+  type ExcelFieldChange,
+  type ExcelUploadConflictPreview,
+  type ExcelUploadResponse,
+  type SyncResultResponse,
+} from "./services/api";
 
 export interface EmployeeSummary {
   id: number;
@@ -64,39 +74,10 @@ export interface AttendanceSummaryResponse {
   last_sync?: string;
 }
 
-export function getApiErrorMessage(error: unknown, fallback: string): string {
-  if (axios.isAxiosError(error)) {
-    const detail = error.response?.data?.detail;
-    if (typeof detail === "string") {
-      return detail;
-    }
-    if (typeof detail === "object" && detail && "message" in detail) {
-      return String(detail.message);
-    }
-    if (Array.isArray(detail) && detail.length > 0) {
-      const first = detail[0];
-      if (typeof first === "object" && first && "msg" in first) {
-        return String(first.msg);
-      }
-    }
-  }
-  return fallback;
-}
-
-export async function fetchAttendance(year: number, month: number) {
-  const { data } = await client.get<MonthlyAttendanceResponse>(`/attendance/${year}/${month}`);
-  return data;
-}
-
 export async function fetchAttendanceSummary(year: number, month: number) {
   const { data } = await client.get<AttendanceSummaryResponse>(
     `/attendance/summary/${year}/${month}`
   );
-  return data;
-}
-
-export async function syncAll() {
-  const { data } = await client.post("/sync/all");
   return data;
 }
 
@@ -125,76 +106,8 @@ export async function fetchSyncStatus() {
   return data;
 }
 
-export async function downloadExcel(year: number, month: number) {
-  const response = await client.get(`/excel/download/${year}/${month}`, {
-    responseType: "blob",
-  });
-  const blob = new Blob([response.data]);
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `attendance_${year}_${String(month).padStart(2, "0")}.xlsx`;
-  link.click();
-  window.URL.revokeObjectURL(url);
-}
-
-export interface ExcelUploadConflictPreview {
-  id: number;
-  employee_id: number;
-  employee_name: string;
-  field_name: string;
-  dingtalk_value?: string;
-  manual_value?: string;
-  status: string;
-}
-
-export interface ExcelUploadResponse {
-  success: boolean;
-  year: number;
-  month: number;
-  snapshot_id: number;
-  total_changes: number;
-  employees_affected: number;
-  changes_detected: number;
-  employees_modified: number;
-  conflicts_created: number;
-  auto_merged: number;
-  has_conflicts: boolean;
-  conflicts_list: ExcelUploadConflictPreview[];
-  pending_conflicts_count: number;
-  changes_list: ExcelFieldChange[];
-  changes: ExcelFieldChange[];
-}
-
-export interface ExcelFieldChange {
-  employee_id: number;
-  employee_name: string;
-  field_name: string;
-  old_value?: string;
-  new_value?: string;
-  conflict: boolean;
-  conflict_id?: number | null;
-}
-
-export async function uploadExcel(
-  year: number,
-  month: number,
-  file: File,
-  onProgress?: (percent: number) => void
-) {
-  const formData = new FormData();
-  formData.append("year", String(year));
-  formData.append("month", String(month));
-  formData.append("file", file);
-  const { data } = await client.post<ExcelUploadResponse>("/excel/upload", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
-    onUploadProgress: (event) => {
-      if (!event.total) {
-        return;
-      }
-      onProgress?.(Math.round((event.loaded * 100) / event.total));
-    },
-  });
+export async function fetchAttendance(year: number, month: number) {
+  const { data } = await client.get<MonthlyAttendanceResponse>(`/attendance/${year}/${month}`);
   return data;
 }
 

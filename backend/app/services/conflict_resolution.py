@@ -176,8 +176,9 @@ def resolve_conflict(
             ManualChange.month == conflict.month,
             ManualChange.employee_id == conflict.employee_id,
             ManualChange.field_name == conflict.field_name,
+            ManualChange.merged_to_truth.is_(False),
         )
-        .order_by(ManualChange.change_timestamp.desc())
+        .order_by(ManualChange.change_timestamp.desc(), ManualChange.id.desc())
         .first()
     )
     if manual_change:
@@ -249,24 +250,49 @@ def resolve_conflicts_batch(
     resolved_by: int,
     resolved_value: Optional[str],
     user: User,
-) -> List[Conflict]:
+) -> Tuple[List[Conflict], int]:
+    """
+    Resolve multiple conflicts with the same method.
+
+    Returns ``(resolved_conflicts, failed_count)``. Individual failures are logged
+    and skipped so the rest of the batch can proceed.
+    """
     if not conflict_ids:
         raise ConflictResolutionError("conflict_ids must not be empty")
 
     resolved: List[Conflict] = []
+    failed = 0
+
     for conflict_id in conflict_ids:
-        conflict = _get_conflict(db, company_id, conflict_id)
-        resolved.append(
-            resolve_conflict(
-                db,
-                conflict,
-                resolution_method=resolution_method,
-                resolved_by=resolved_by,
-                resolved_value=resolved_value,
-                record_version=False,
-                user=None,
+        try:
+            conflict = _get_conflict(db, company_id, conflict_id)
+            resolved.append(
+                resolve_conflict(
+                    db,
+                    conflict,
+                    resolution_method=resolution_method,
+                    resolved_by=resolved_by,
+                    resolved_value=resolved_value,
+                    record_version=False,
+                    user=None,
+                )
             )
-        )
+        except ConflictResolutionError as exc:
+            failed += 1
+            logger.warning(
+                "Batch resolve skipped conflict_id=%s: %s",
+                conflict_id,
+                exc.message,
+            )
+
+    if not resolved:
+        db.rollback()
+        if failed:
+            raise ConflictResolutionError(
+                f"Failed to resolve {failed} conflict(s)",
+                status_code=400,
+            )
+        raise ConflictResolutionError("No conflicts were resolved")
 
     grouped: dict[tuple[int, int], List[Conflict]] = {}
     for conflict in resolved:
@@ -285,7 +311,7 @@ def resolve_conflicts_batch(
         )
 
     db.commit()
-    return resolved
+    return resolved, failed
 
 
 def auto_resolve_conflicts(

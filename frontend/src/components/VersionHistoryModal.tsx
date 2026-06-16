@@ -11,8 +11,8 @@ import {
   Typography,
   message,
 } from "antd";
+import { ArrowRightOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import ReactDiffViewer from "react-diff-viewer-continued";
 import {
   VersionCompareResponse,
   VersionListItem,
@@ -26,7 +26,7 @@ import {
 import { useLanguage } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface VersionHistoryModalProps {
   open: boolean;
@@ -44,7 +44,13 @@ function formatTimestamp(value?: string, locale = "zh-CN") {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString(locale);
+  return date.toLocaleString(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function fieldLabel(
@@ -82,6 +88,24 @@ function resolveComparePayload(left: VersionListItem, right: VersionListItem) {
   };
 }
 
+function ValueChange({
+  oldValue,
+  newValue,
+}: {
+  oldValue: string;
+  newValue: string;
+}) {
+  return (
+    <Space size="small" wrap>
+      <Text type="secondary" delete={Boolean(oldValue)}>
+        {oldValue || "—"}
+      </Text>
+      <ArrowRightOutlined style={{ color: "#1677ff", fontSize: 12 }} />
+      <Text strong={Boolean(newValue)}>{newValue || "—"}</Text>
+    </Space>
+  );
+}
+
 export default function VersionHistoryModal({
   open,
   year,
@@ -100,7 +124,9 @@ export default function VersionHistoryModal({
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [diff, setDiff] = useState<VersionCompareResponse | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<VersionListItem | null>(null);
-  const [rollbackPreview, setRollbackPreview] = useState<VersionRollbackPreviewResponse | null>(null);
+  const [rollbackPreview, setRollbackPreview] = useState<VersionRollbackPreviewResponse | null>(
+    null
+  );
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const selectedVersions = useMemo(
@@ -167,7 +193,7 @@ export default function VersionHistoryModal({
       setRollbackPreview(preview);
     } catch (err) {
       message.error(getApiErrorMessage(err, t("versionRestoreFailed")));
-      setRollbackPreview(null);
+      setRestoreTarget(null);
     } finally {
       setPreviewLoading(false);
     }
@@ -180,11 +206,15 @@ export default function VersionHistoryModal({
 
     setRestoring(true);
     try {
-      await rollbackVersion(restoreTarget.id, {
+      const result = await rollbackVersion(restoreTarget.id, {
         confirmDataLoss: true,
-        confirmDingtalkOverwrite: Boolean(rollbackPreview?.requires_dingtalk_confirmation),
+        confirmDingtalkOverwrite: true,
       });
-      message.success(t("versionRestoreSuccess"));
+      const successText =
+        result.conflicts_created > 0
+          ? t("versionRestoreSuccessWithConflicts", { count: result.conflicts_created })
+          : t("versionRestoreSuccess");
+      message.success(successText);
       setRestoreTarget(null);
       setRollbackPreview(null);
       await loadVersions();
@@ -216,6 +246,7 @@ export default function VersionHistoryModal({
       dataIndex: "created_by",
       key: "created_by",
       width: 120,
+      ellipsis: true,
     },
     {
       title: t("versionSummary"),
@@ -226,7 +257,7 @@ export default function VersionHistoryModal({
     {
       title: t("versionActions"),
       key: "actions",
-      width: 100,
+      width: 110,
       render: (_, record) =>
         record.can_restore && record.id > 0 ? (
           <Button size="small" onClick={() => void handleRestoreClick(record)}>
@@ -253,16 +284,14 @@ export default function VersionHistoryModal({
       render: (value: string) => fieldLabel(value, t),
     },
     {
-      title: t("versionOldValue"),
-      dataIndex: "value_in_snapshot_1",
-      key: "value_in_snapshot_1",
-      render: (value: string) => <Text type="secondary">{value || "—"}</Text>,
-    },
-    {
-      title: t("versionNewValue"),
-      dataIndex: "value_in_snapshot_2",
-      key: "value_in_snapshot_2",
-      render: (value: string) => <Text>{value || "—"}</Text>,
+      title: t("versionChange"),
+      key: "change",
+      render: (_, record) => (
+        <ValueChange
+          oldValue={record.value_in_snapshot_1}
+          newValue={record.value_in_snapshot_2}
+        />
+      ),
     },
   ];
 
@@ -310,7 +339,9 @@ export default function VersionHistoryModal({
               onChange: (keys) => setSelectedRowKeys(keys as string[]),
               getCheckboxProps: (record) => ({
                 disabled:
-                  selectedRowKeys.length >= 2 && !selectedRowKeys.includes(versionRowKey(record)),
+                  !record.snapshot_id ||
+                  (selectedRowKeys.length >= 2 &&
+                    !selectedRowKeys.includes(versionRowKey(record))),
               }),
             }}
           />
@@ -324,10 +355,17 @@ export default function VersionHistoryModal({
 
         {diff && !comparing && (
           <div style={{ marginTop: 24 }}>
-            <Title level={5}>{t("versionDiffTitle")}</Title>
+            <Text strong style={{ display: "block", marginBottom: 12 }}>
+              {t("versionDiffTitle")}
+              {selectedVersions.length === 2 && (
+                <Text type="secondary" style={{ marginLeft: 8, fontWeight: 400 }}>
+                  (v{selectedVersions[0].version_number} → v{selectedVersions[1].version_number})
+                </Text>
+              )}
+            </Text>
 
             {(diff.added_employees.length > 0 || diff.removed_employees.length > 0) && (
-              <Space wrap style={{ marginBottom: 16 }}>
+              <Space direction="vertical" style={{ width: "100%", marginBottom: 16 }}>
                 {diff.added_employees.length > 0 && (
                   <Alert
                     type="success"
@@ -341,7 +379,9 @@ export default function VersionHistoryModal({
                     type="warning"
                     showIcon
                     message={t("versionRemovedEmployees")}
-                    description={diff.removed_employees.map((item) => item.employee_name).join(", ")}
+                    description={diff.removed_employees
+                      .map((item) => item.employee_name)
+                      .join(", ")}
                   />
                 )}
               </Space>
@@ -353,33 +393,11 @@ export default function VersionHistoryModal({
                 size="small"
                 columns={diffColumns}
                 dataSource={diff.changed_fields}
-                pagination={{ pageSize: 6 }}
-                style={{ marginBottom: 16 }}
+                pagination={{ pageSize: 8, showSizeChanger: true }}
               />
             ) : (
-              <Alert type="info" message={t("versionNoData")} style={{ marginBottom: 16 }} />
+              <Alert type="info" message={t("versionNoFieldChanges")} />
             )}
-
-            <Title level={5} style={{ marginTop: 8 }}>
-              {t("versionDiffViewer")}
-            </Title>
-            <div
-              style={{
-                maxHeight: 320,
-                overflow: "auto",
-                border: "1px solid #f0f0f0",
-                borderRadius: 8,
-              }}
-            >
-              <ReactDiffViewer
-                oldValue={diff.diff_text_old}
-                newValue={diff.diff_text_new}
-                splitView
-                useDarkTheme={false}
-                leftTitle={`v${selectedVersions[0]?.version_number ?? ""}`}
-                rightTitle={`v${selectedVersions[1]?.version_number ?? ""}`}
-              />
-            </div>
           </div>
         )}
       </Modal>
@@ -395,9 +413,10 @@ export default function VersionHistoryModal({
         confirmLoading={restoring}
         okText={t("confirm")}
         cancelText={t("cancel")}
+        okButtonProps={{ danger: Boolean(rollbackPreview?.requires_dingtalk_confirmation) }}
       >
         {previewLoading ? (
-          <Skeleton active paragraph={{ rows: 2 }} />
+          <Skeleton active paragraph={{ rows: 3 }} />
         ) : (
           <>
             <Text>
@@ -422,6 +441,26 @@ export default function VersionHistoryModal({
                 message={t("versionRollbackDingtalkWarning", {
                   count: rollbackPreview.dingtalk_overwrite_warnings.length,
                 })}
+                description={
+                  <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+                    {rollbackPreview.dingtalk_overwrite_warnings.slice(0, 5).map((warning) => (
+                      <li key={`${warning.employee_id}-${warning.field_name}`}>
+                        {warning.employee_name} / {fieldLabel(warning.field_name, t)}:{" "}
+                        <ValueChange
+                          oldValue={warning.current_value}
+                          newValue={warning.rollback_value}
+                        />
+                      </li>
+                    ))}
+                    {rollbackPreview.dingtalk_overwrite_warnings.length > 5 && (
+                      <li>
+                        {t("versionRollbackMoreWarnings", {
+                          count: rollbackPreview.dingtalk_overwrite_warnings.length - 5,
+                        })}
+                      </li>
+                    )}
+                  </ul>
+                }
               />
             )}
           </>

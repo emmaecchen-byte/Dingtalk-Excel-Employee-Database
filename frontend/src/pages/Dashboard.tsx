@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  Alert,
   Button,
   Card,
   Input,
@@ -26,7 +27,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import CloneMonthModal from "../components/CloneMonthModal";
 import ConflictResolutionModal from "../components/ConflictResolutionModal";
-import EmployeeAttendanceTable from "../components/EmployeeAttendanceTable";
+import EmployeeTable from "../components/EmployeeTable";
 import PendingUpdatesWidget from "../components/PendingUpdatesWidget";
 import SummaryCards from "../components/SummaryCards";
 import VersionHistoryModal from "../components/VersionHistoryModal";
@@ -75,6 +76,7 @@ function DashboardContent() {
     isLoading,
     attendanceLoading,
     syncing,
+    syncStatusMessage,
     uploading,
     downloading,
     exportingPdf,
@@ -164,6 +166,15 @@ function DashboardContent() {
       </Header>
 
       <Content style={{ padding: 24, maxWidth: 1200, margin: "0 auto", width: "100%" }}>
+        {syncStatusMessage && (
+          <Alert
+            message={syncStatusMessage}
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
         <Card style={{ marginBottom: 16 }}>
           <Space wrap>
             <Select value={year} onChange={setYear} options={yearOptions} />
@@ -262,7 +273,7 @@ function DashboardContent() {
             </Space>
           }
         >
-          <EmployeeAttendanceTable
+          <EmployeeTable
             year={year}
             month={month}
             loading={attendanceLoading}

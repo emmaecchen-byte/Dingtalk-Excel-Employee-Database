@@ -133,18 +133,6 @@ def restore_version_by_id(
     return VersionRestoreResponse(**result)
 
 
-@router.get("/{version_id}", response_model=VersionDetailResponse)
-def get_version(
-    version_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(HR_ROLES)),
-):
-    try:
-        return VersionDetailResponse(**get_version_detail(db, current_user.company_id, version_id))
-    except VersionServiceError as exc:
-        _raise_version_error(exc)
-
-
 @router.get("/{year}/{month}", response_model=VersionListResponse)
 def get_version_history(
     year: int,
@@ -163,3 +151,15 @@ def get_version_history(
 
     versions = list_versions(db, current_user.company_id, year, month)
     return VersionListResponse(year=year, month=month, total=len(versions), versions=versions)
+
+
+@router.get("/{version_id}", response_model=VersionDetailResponse)
+def get_version(
+    version_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(HR_ROLES)),
+):
+    try:
+        return VersionDetailResponse(**get_version_detail(db, current_user.company_id, version_id))
+    except VersionServiceError as exc:
+        _raise_version_error(exc)

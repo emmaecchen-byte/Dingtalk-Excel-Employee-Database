@@ -9,9 +9,9 @@ from typing import Iterator
 
 from sqlalchemy.orm import Session
 
-from app.excel.attendance_export import (
-    AttendanceExcelError,
+from app.services.excel_generator import (
     ExcelExportResult,
+    ExcelGeneratorError,
     generate_attendance_excel,
 )
 from app.models import ExcelSnapshot, User
@@ -69,7 +69,7 @@ def prepare_excel_download(
     3. Return streaming result for the HTTP response
     """
     if month < 1 or month > 12:
-        raise AttendanceExcelError("Month must be between 1 and 12")
+        raise ExcelGeneratorError("Month must be between 1 and 12", status_code=400)
 
     filename = f"attendance_{year}_{month:02d}.xlsx"
 
@@ -96,7 +96,7 @@ def prepare_excel_download(
         db.commit()
         if snapshot:
             db.refresh(snapshot)
-    except (AttendanceExcelError, SnapshotServiceError):
+    except (ExcelGeneratorError, SnapshotServiceError):
         db.rollback()
         raise
     except Exception:

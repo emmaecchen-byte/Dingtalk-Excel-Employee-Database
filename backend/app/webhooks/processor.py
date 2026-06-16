@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.excel.field_utils import apply_field_value, get_field_value
-from app.models import Company, Conflict, Employee, ManualChange, MonthlyAttendance, PendingUpdate
-from app.services.conflict_detection import values_conflict
+from app.excel.field_utils import get_field_value
+from app.models import Company, Conflict, Employee, MonthlyAttendance, PendingUpdate
+from app.services.conflict_detector import check_for_conflicts_on_update
 from app.services.webhook_sync import SyncFieldUpdate, sync_attendance, sync_leaves
 from app.webhooks.dingtalk_crypto import DingTalkCallbackCrypto, DingTalkWebhookError
 from app.webhooks.signature import WebhookSignatureError, verify_webhook_signature
@@ -270,54 +270,6 @@ def _find_duplicate_pending(
     return None
 
 
-def _pending_manual_value(
-    db: Session,
-    *,
-    company_id: int,
-    employee_id: int,
-    year: int,
-    month: int,
-    field_name: str,
-    record: MonthlyAttendance,
-) -> Tuple[bool, Optional[str]]:
-    manual_change = (
-        db.query(ManualChange)
-        .filter(
-            ManualChange.company_id == company_id,
-            ManualChange.employee_id == employee_id,
-            ManualChange.year == year,
-            ManualChange.month == month,
-            ManualChange.field_name == field_name,
-            ManualChange.merged_to_truth.is_(False),
-        )
-        .order_by(ManualChange.change_timestamp.desc())
-        .first()
-    )
-    if manual_change and manual_change.new_value is not None:
-        return True, manual_change.new_value
-
-    manual_change = (
-        db.query(ManualChange)
-        .filter(
-            ManualChange.company_id == company_id,
-            ManualChange.employee_id == employee_id,
-            ManualChange.year == year,
-            ManualChange.month == month,
-            ManualChange.field_name == field_name,
-        )
-        .order_by(ManualChange.change_timestamp.desc())
-        .first()
-    )
-    if manual_change and manual_change.new_value is not None:
-        return True, manual_change.new_value
-
-    overrides = record.manual_overrides or {}
-    if field_name in overrides:
-        return True, str(overrides[field_name])
-
-    return False, None
-
-
 def _apply_field_updates(
     db: Session,
     *,
@@ -341,55 +293,36 @@ def _apply_field_updates(
         if previous_value is None:
             previous_value = get_field_value(record, update.field_name)
 
-        has_manual, manual_value = _pending_manual_value(
+        check_result = check_for_conflicts_on_update(
             db,
             company_id=company.id,
-            employee_id=employee.id,
             year=year,
             month=month,
+            employee_id=employee.id,
             field_name=update.field_name,
-            record=record,
+            dingtalk_value=update.dingtalk_value,
+            sync_timestamp=now,
         )
 
-        if has_manual and values_conflict(
-            update.dingtalk_value,
-            manual_value or "",
-            old_value=previous_value,
-        ):
-            conflict = Conflict(
-                company_id=company.id,
-                year=year,
-                month=month,
-                employee_id=employee.id,
-                field_name=update.field_name,
-                dingtalk_value=update.dingtalk_value,
-                manual_value=manual_value,
-                status="pending",
-            )
-            db.add(conflict)
-            db.flush()
-            conflicts.append(conflict)
+        if check_result.has_conflict and check_result.conflict:
+            conflicts.append(check_result.conflict)
             logger.info(
                 "Webhook conflict: employee=%s field=%s dingtalk=%s manual=%s",
                 employee.name,
                 update.field_name,
                 update.dingtalk_value,
-                manual_value,
+                check_result.conflict.manual_value,
             )
             continue
 
-        apply_field_value(record, update.field_name, update.dingtalk_value)
-        applied.append(
-            {
-                "field_name": update.field_name,
-                "previous_value": previous_value,
-                "dingtalk_value": update.dingtalk_value,
-            }
-        )
-
-    if applied:
-        record.last_sync_from_dingtalk = now
-        record.updated_at = now
+        if check_result.applied:
+            applied.append(
+                {
+                    "field_name": update.field_name,
+                    "previous_value": check_result.previous_value or previous_value,
+                    "dingtalk_value": update.dingtalk_value,
+                }
+            )
 
     return applied, conflicts, len(applied)
 

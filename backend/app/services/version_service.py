@@ -21,6 +21,8 @@ from app.services.snapshot_service import (
     SnapshotServiceError,
     create_snapshot_from_data,
     get_snapshot_diff,
+    get_version_history,
+    snapshot_employee_index,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,7 +123,7 @@ def _version_item_from_history(version: VersionHistory, user_names: Optional[Dic
 
 
 def _version_item_from_snapshot(snapshot: ExcelSnapshot, downloader_name: str) -> Dict[str, Any]:
-    employee_count = len((snapshot.data_snapshot or {}).get("employees") or [])
+    employee_count = len(snapshot_employee_index(snapshot))
     return {
         "id": 0,
         "version_number": snapshot.snapshot_version,
@@ -147,24 +149,9 @@ def list_versions(
     year: int,
     month: int,
 ) -> List[Dict[str, Any]]:
-    versions = (
-        db.query(VersionHistory)
-        .filter(
-            VersionHistory.company_id == company_id,
-            VersionHistory.year == year,
-            VersionHistory.month == month,
-        )
-        .order_by(VersionHistory.version_number.desc(), VersionHistory.id.desc())
-        .all()
-    )
+    items = get_version_history(db, company_id, year, month)
 
-    user_ids = {version.created_by_user_id for version in versions if version.created_by_user_id}
-    user_names = {
-        user.id: user.name
-        for user in db.query(User).filter(User.id.in_(user_ids)).all()
-    } if user_ids else {}
-
-    linked_snapshot_ids = {version.snapshot_id for version in versions if version.snapshot_id}
+    linked_snapshot_ids = {item["snapshot_id"] for item in items if item.get("snapshot_id")}
     orphan_snapshots = (
         db.query(ExcelSnapshot)
         .filter(
@@ -187,7 +174,6 @@ def list_versions(
         for user in db.query(User).filter(User.id.in_(downloader_ids)).all()
     } if downloader_ids else {}
 
-    items = [_version_item_from_history(version, user_names) for version in versions]
     for snapshot in orphan_snapshots:
         name = downloader_names.get(snapshot.downloaded_by, "System") if snapshot.downloaded_by else "System"
         items.append(_version_item_from_snapshot(snapshot, name))
@@ -362,6 +348,7 @@ def get_version_detail(
         "changes_summary": version.changes_summary or {},
         "version_note": version.version_note,
         "snapshot_id": version.snapshot_id,
+        "snapshot_data": data_snapshot,
         "data_snapshot": data_snapshot,
         "snapshot_version": snapshot.snapshot_version if snapshot else None,
     }
@@ -372,8 +359,8 @@ def _compute_rollback_changes(
     company_id: int,
     snapshot: ExcelSnapshot,
 ) -> List[RollbackFieldChange]:
-    employees = (snapshot.data_snapshot or {}).get("employees") or []
-    if not employees:
+    index = snapshot_employee_index(snapshot)
+    if not index:
         raise VersionServiceError("Snapshot contains no employee data", status_code=400)
 
     attendance_records = {
@@ -388,11 +375,7 @@ def _compute_rollback_changes(
     }
 
     changes: List[RollbackFieldChange] = []
-    for employee_data in employees:
-        employee_id = employee_data.get("employee_id")
-        if employee_id is None:
-            continue
-
+    for employee_id, employee_data in index.items():
         record = attendance_records.get(employee_id)
         if not record:
             continue

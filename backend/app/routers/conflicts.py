@@ -1,3 +1,9 @@
+"""
+Conflict resolution API: list pending conflicts and apply HR resolutions.
+"""
+
+from __future__ import annotations
+
 import logging
 from datetime import datetime
 from typing import List, Optional
@@ -7,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
 from app.database import get_db
-from app.models import Conflict, Employee, ManualChange, MonthlyAttendance, User
+from app.models import Conflict, Employee, MonthlyAttendance, User
 from app.schemas import (
     ConflictAutoResolveRequest,
     ConflictBatchResolveRequest,
@@ -32,6 +38,19 @@ router = APIRouter(prefix="/api/conflicts", tags=["conflicts"])
 HR_ROLES = ["hr_admin", "hr_viewer"]
 
 
+def _validate_period(year: int, month: int) -> None:
+    if year < 2000 or year > 2100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Year must be between 2000 and 2100",
+        )
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12",
+        )
+
+
 def _format_timestamp(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None
 
@@ -44,6 +63,7 @@ def _build_conflict_items(
     month: int,
     conflicts: List[Conflict],
 ) -> List[ConflictItem]:
+    """Join conflicts with employee names and attendance sync metadata."""
     if not conflicts:
         return []
 
@@ -66,18 +86,6 @@ def _build_conflict_items(
     for conflict in conflicts:
         employee = employees.get(conflict.employee_id)
         record = attendance_records.get(conflict.employee_id)
-        manual_change = (
-            db.query(ManualChange)
-            .filter(
-                ManualChange.company_id == company_id,
-                ManualChange.year == year,
-                ManualChange.month == month,
-                ManualChange.employee_id == conflict.employee_id,
-                ManualChange.field_name == conflict.field_name,
-            )
-            .order_by(ManualChange.change_timestamp.desc())
-            .first()
-        )
 
         items.append(
             ConflictItem(
@@ -88,9 +96,7 @@ def _build_conflict_items(
                 field_name=conflict.field_name,
                 manual_value=conflict.manual_value,
                 dingtalk_value=conflict.dingtalk_value,
-                manual_edit_at=_format_timestamp(
-                    manual_change.change_timestamp if manual_change else conflict.created_at
-                ),
+                manual_edit_at=_format_timestamp(conflict.created_at),
                 dingtalk_sync_at=_format_timestamp(
                     record.last_sync_from_dingtalk if record else None
                 ),
@@ -107,8 +113,13 @@ def batch_resolve_conflicts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """
+    Resolve multiple conflicts with the same resolution method.
+
+    Body: ``{ conflict_ids: [1, 2, 3], resolution_method: 'dingtalk_priority' }``
+    """
     try:
-        resolved = resolve_conflicts_batch(
+        resolved, failed = resolve_conflicts_batch(
             db,
             company_id=current_user.company_id,
             conflict_ids=payload.conflict_ids,
@@ -120,12 +131,24 @@ def batch_resolve_conflicts(
     except ConflictResolutionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    pending_count = count_pending_conflicts(db, current_user.company_id)
+    remaining = count_pending_conflicts(db, current_user.company_id)
+    resolved_count = len(resolved)
+    logger.info(
+        "Batch resolve: user_id=%s resolved=%s failed=%s remaining=%s",
+        current_user.id,
+        resolved_count,
+        failed,
+        remaining,
+    )
     return ConflictResolveResponse(
         success=True,
-        resolved_count=len(resolved),
-        pending_conflicts_count=pending_count,
+        resolved=resolved_count,
+        failed=failed,
+        remaining=remaining,
+        resolved_count=resolved_count,
+        pending_conflicts_count=remaining,
         conflict_ids=[conflict.id for conflict in resolved],
+        resolution_method=payload.resolution_method,
     )
 
 
@@ -135,6 +158,19 @@ def auto_resolve(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """
+    Auto-resolve pending conflicts using ``users.preferences.conflict_priority``.
+
+    Optional ``year`` / ``month`` limit scope; otherwise all pending conflicts apply.
+    """
+    if payload.year is not None or payload.month is not None:
+        if payload.year is None or payload.month is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Both year and month are required when filtering by period",
+            )
+        _validate_period(payload.year, payload.month)
+
     try:
         resolved, skipped, method_used = auto_resolve_conflicts(
             db,
@@ -146,18 +182,23 @@ def auto_resolve(
     except ConflictResolutionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    pending_count = count_pending_conflicts(db, current_user.company_id)
+    remaining = count_pending_conflicts(db, current_user.company_id)
+    resolved_count = len(resolved)
     logger.info(
-        "Auto-resolve requested by user_id=%s resolved=%s skipped=%s pending=%s",
+        "Auto-resolve: user_id=%s resolved=%s skipped=%s remaining=%s method=%s",
         current_user.id,
-        len(resolved),
+        resolved_count,
         skipped,
-        pending_count,
+        remaining,
+        method_used,
     )
     return ConflictResolveResponse(
         success=True,
-        resolved_count=len(resolved),
-        pending_conflicts_count=pending_count,
+        resolved=resolved_count,
+        failed=skipped,
+        remaining=remaining,
+        resolved_count=resolved_count,
+        pending_conflicts_count=remaining,
         conflict_ids=[conflict.id for conflict in resolved],
         skipped_count=skipped,
         resolution_method=method_used,
@@ -171,14 +212,14 @@ def list_conflicts(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
-    """Return all pending conflicts for the month, joined with employee names."""
-    if year < 2000 or year > 2100:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Year must be between 2000 and 2100",
-        )
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Month must be between 1 and 12")
+    """
+    List pending conflicts for a month with employee names.
+
+    Returns items shaped as:
+    ``{ id, employee_name, field_name, dingtalk_value, manual_value, created_at }``
+    (plus employee_id, department, status for the UI).
+    """
+    _validate_period(year, month)
 
     conflicts = (
         db.query(Conflict)
@@ -216,6 +257,15 @@ def resolve_conflict_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
+    """
+    Resolve a single conflict.
+
+    - ``manual`` — use ``resolved_value`` from the request body
+    - ``dingtalk_priority`` — use ``dingtalk_value`` from the conflict record
+    - ``manual_priority`` — use ``manual_value`` from the conflict record
+
+    Updates ``conflicts``, ``monthly_attendance``, ``manual_changes``, and ``version_history``.
+    """
     try:
         conflict = resolve_single_conflict(
             db,
@@ -228,6 +278,14 @@ def resolve_conflict_endpoint(
         )
     except ConflictResolutionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    logger.info(
+        "Conflict resolved: user_id=%s conflict_id=%s method=%s value=%s",
+        current_user.id,
+        conflict.id,
+        conflict.resolution_method,
+        conflict.resolved_value,
+    )
 
     return ConflictSingleResolveResponse(
         success=True,

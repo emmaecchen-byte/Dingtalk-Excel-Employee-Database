@@ -2,9 +2,19 @@
 """
 Idempotent demo database seeder for local testing without DingTalk.
 
-Usage (from backend directory):
-    python scripts/seed_demo_data.py
-    python scripts/seed_demo_data.py --force   # refresh May 2026 attendance rows
+Seeds:
+  - Demo Company + admin/viewer users
+  - 15 employees with May 2026 attendance (mixed anomalies)
+  - Excel snapshot + version_history
+
+Usage:
+    npm run seed                          # from repo root
+    python scripts/seed_demo_data.py      # from backend/
+    python scripts/seed_demo_data.py --force   # rebuild May 2026 rows
+
+Logins:
+    admin@demo.com  / Admin123!   (hr_admin)
+    viewer@demo.com / Viewer123!  (hr_viewer)
 """
 
 from __future__ import annotations
@@ -47,7 +57,8 @@ DEMO_MONTH = 5
 
 DEMO_ADMIN_EMAIL = "admin@demo.com"
 DEMO_VIEWER_EMAIL = "viewer@demo.com"
-DEMO_PASSWORD = "Admin123!"
+DEMO_ADMIN_PASSWORD = "Admin123!"
+DEMO_VIEWER_PASSWORD = "Viewer123!"
 
 DEMO_EMPLOYEES: List[Dict[str, Any]] = [
     {
@@ -218,6 +229,48 @@ DEMO_EMPLOYEES: List[Dict[str, Any]] = [
         "anomaly_summary": "旷工1天、迟到2次、缺卡1天",
         "notes": "项目现场考勤",
     },
+    {
+        "name": "黄涛",
+        "department": "质量部",
+        "position": "检验员",
+        "employee_code": "E013",
+        "dingtalk_user_id": "dt_user_013",
+        "total_attendance_days": 22,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": None,
+        "notes": None,
+    },
+    {
+        "name": "马婷",
+        "department": "财务部",
+        "position": "会计",
+        "employee_code": "E014",
+        "dingtalk_user_id": "dt_user_014",
+        "total_attendance_days": 21,
+        "absenteeism_count": 0,
+        "lateness_count": 1,
+        "missing_punch_count": 0,
+        "supplement_submitted": True,
+        "anomaly_summary": "迟到1次",
+        "notes": "月末结账加班",
+    },
+    {
+        "name": "徐磊",
+        "department": "朋创",
+        "position": "班组长",
+        "employee_code": "E015",
+        "dingtalk_user_id": "dt_user_015",
+        "total_attendance_days": 3,
+        "absenteeism_count": 19,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "旷工19天",
+        "notes": "长期缺勤待核实",
+    },
 ]
 
 DEMO_MANUAL_CHANGES = [
@@ -299,6 +352,7 @@ def _get_or_create_user(
     email: str,
     name: str,
     role: str,
+    password: str,
 ) -> User:
     user = db.query(User).filter(User.email == email).first()
     if user:
@@ -306,15 +360,14 @@ def _get_or_create_user(
         user.name = name
         user.role = role
         user.is_active = True
-        if not user.password_hash:
-            user.password_hash = hash_password(DEMO_PASSWORD)
+        user.password_hash = hash_password(password)
         return user
 
     user = User(
         company_id=company_id,
         name=name,
         email=email,
-        password_hash=hash_password(DEMO_PASSWORD),
+        password_hash=hash_password(password),
         role=role,
         is_active=True,
     )
@@ -556,6 +609,7 @@ def seed_demo_data(db: Session, *, force: bool = False) -> Dict[str, Any]:
         email=DEMO_ADMIN_EMAIL,
         name="HR Admin",
         role="hr_admin",
+        password=DEMO_ADMIN_PASSWORD,
     )
     _get_or_create_user(
         db,
@@ -563,6 +617,7 @@ def seed_demo_data(db: Session, *, force: bool = False) -> Dict[str, Any]:
         email=DEMO_VIEWER_EMAIL,
         name="HR Viewer",
         role="hr_viewer",
+        password=DEMO_VIEWER_PASSWORD,
     )
 
     sync_time = datetime.utcnow()
@@ -609,8 +664,9 @@ def seed_demo_data(db: Session, *, force: bool = False) -> Dict[str, Any]:
         "version_id": version_id,
         "manual_changes": manual_changes,
         "admin_email": DEMO_ADMIN_EMAIL,
+        "admin_password": DEMO_ADMIN_PASSWORD,
         "viewer_email": DEMO_VIEWER_EMAIL,
-        "password": DEMO_PASSWORD,
+        "viewer_password": DEMO_VIEWER_PASSWORD,
     }
     logger.info("Demo seed complete: %s", summary)
     return summary
@@ -641,8 +697,8 @@ def main() -> int:
     print(f"  Company:   {summary['company']}")
     print(f"  Period:    {summary['year']}-{summary['month']:02d}")
     print(f"  Employees: {summary['employees']}")
-    print(f"  Login:     {summary['admin_email']} / {summary['password']}")
-    print(f"  Viewer:    {summary['viewer_email']} / {summary['password']}")
+    print(f"  Admin:     {summary['admin_email']} / {summary['admin_password']}")
+    print(f"  Viewer:    {summary['viewer_email']} / {summary['viewer_password']}")
     return 0
 
 
