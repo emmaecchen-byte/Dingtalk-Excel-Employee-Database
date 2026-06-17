@@ -16,6 +16,7 @@ from app.routers import sync as sync_router
 from app.routers import excel as excel_router
 from app.routers import versions as versions_router
 from app.routers import webhooks as webhooks_router
+from app.routers import webhooks_api as webhooks_api_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,4 +52,5 @@ app.include_router(versions_router.router)
 app.include_router(excel_router.router)
 app.include_router(clone_router.router)
 app.include_router(webhooks_router.router)
+app.include_router(webhooks_api_router.router)
 app.include_router(routes.router)

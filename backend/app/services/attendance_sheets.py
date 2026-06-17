@@ -15,11 +15,9 @@ from app.excel.template_generator import SIGN_COUNT_SYMBOLS, count_month_work_da
 from app.models import Company, MonthlyAttendance
 from app.excel.monthly_status_display import format_monthly_summary_day_status
 from app.services.excel_generator import (
-    _is_half_day_mark,
     first_anomaly_date,
-    map_day_status_to_excel,
+    map_sign_sheet_status,
     resolve_day_value,
-    split_day_halves,
 )
 from app.services.sync_counts import count_pending_conflicts, count_pending_updates
 
@@ -32,11 +30,12 @@ def _count_sign_symbols(morning_values: List[str]) -> Dict[str, int]:
     return counts
 
 
-def _build_half_day_rows(
+def _build_sign_day_rows(
     record: MonthlyAttendance,
     year: int,
     month: int,
 ) -> tuple[List[str], List[str]]:
+    """Build identical 上午 / 下午 symbol rows for the web 签字 preview."""
     days_in_month = calendar.monthrange(year, month)[1]
     morning: List[str] = []
     afternoon: List[str] = []
@@ -47,21 +46,9 @@ def _build_half_day_rows(
             afternoon.append("")
             continue
 
-        raw = resolve_day_value(record, day).strip()
-        if not raw:
-            morning.append("")
-            afternoon.append("")
-            continue
-
-        if not _is_half_day_mark(raw):
-            mapped = map_day_status_to_excel(raw)
-            morning.append(mapped)
-            afternoon.append(mapped)
-            continue
-
-        am_value, pm_value = split_day_halves(raw)
-        morning.append(map_day_status_to_excel(am_value))
-        afternoon.append(map_day_status_to_excel(pm_value))
+        symbol = map_sign_sheet_status(resolve_day_value(record, day))
+        morning.append(symbol)
+        afternoon.append(symbol)
 
     return morning, afternoon
 
@@ -84,7 +71,7 @@ def _employee_sheet_row(record: MonthlyAttendance, year: int, month: int) -> dic
         )
         days.append(display or "")
 
-    morning, afternoon = _build_half_day_rows(record, year, month)
+    morning, afternoon = _build_sign_day_rows(record, year, month)
     sign_counts = _count_sign_symbols(morning[:days_in_month])
     present_days = sign_counts.get("√", 0)
     work_days = count_month_work_days(year, month)

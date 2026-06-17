@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -11,6 +12,7 @@ from app.auth.dingtalk import DingTalkAuthError, dingtalk_client
 from app.auth.dingtalk_service import find_or_create_user_from_dingtalk, refresh_stored_dingtalk_token
 from app.auth.schemas import (
     AccessTokenResponse,
+    DingTalkOAuthStatusResponse,
     LoginRequest,
     LogoutRequest,
     MessageResponse,
@@ -31,11 +33,19 @@ from app.config import settings
 from app.database import get_db
 from app.models import Company, RefreshToken, User
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 def _user_response(user: User, db: Session) -> UserResponse:
     company = db.query(Company).filter(Company.id == user.company_id).first()
+    dingtalk_prefs = (user.preferences or {}).get("dingtalk", {})
+    corp_id = (
+        company.dingtalk_corp_id
+        if company and company.dingtalk_corp_id
+        else dingtalk_prefs.get("corp_id")
+    )
     auth_provider = "dingtalk" if user.dingtalk_user_id and not user.password_hash else "email"
     if user.dingtalk_user_id and user.password_hash:
         auth_provider = "linked"
@@ -48,7 +58,7 @@ def _user_response(user: User, db: Session) -> UserResponse:
         role=user.role,
         is_active=user.is_active,
         dingtalk_user_id=user.dingtalk_user_id,
-        dingtalk_corp_id=company.dingtalk_corp_id if company else None,
+        dingtalk_corp_id=corp_id,
         auth_provider=auth_provider,
         created_at=user.created_at,
     )
@@ -87,6 +97,16 @@ def _frontend_callback_url(**params: str) -> str:
     return f"{settings.frontend_url.rstrip('/')}/auth/dingtalk/callback?{query}"
 
 
+@router.get("/dingtalk/status", response_model=DingTalkOAuthStatusResponse)
+def dingtalk_oauth_status():
+    missing = dingtalk_client.missing_settings()
+    return DingTalkOAuthStatusResponse(
+        enabled=not missing,
+        authorize_url="/api/auth/dingtalk" if not missing else None,
+        missing_settings=missing,
+    )
+
+
 @router.get("/dingtalk")
 def dingtalk_login():
     try:
@@ -100,6 +120,7 @@ def dingtalk_login():
 def dingtalk_callback(
     request: Request,
     authCode: Optional[str] = None,
+    code: Optional[str] = None,
     state: Optional[str] = None,
     error: Optional[str] = None,
     error_description: Optional[str] = None,
@@ -112,7 +133,8 @@ def dingtalk_callback(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
 
-    if not authCode:
+    authorization_code = authCode or code
+    if not authorization_code:
         return RedirectResponse(
             url=_frontend_callback_url(error="missing_code", message="Missing DingTalk authorization code"),
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
@@ -120,15 +142,19 @@ def dingtalk_callback(
 
     try:
         dingtalk_client.verify_state(state)
-        token_data = dingtalk_client.exchange_auth_code(authCode)
-        access_token = token_data.get("accessToken")
+        token_data = dingtalk_client.exchange_auth_code(authorization_code)
+        access_token = token_data.get("accessToken") or token_data.get("access_token")
         if not access_token:
             raise DingTalkAuthError("DingTalk did not return an access token", status_code=502)
 
-        corp_id = token_data.get("corpId") or settings.dingtalk_corp_id
+        corp_id = (
+            token_data.get("corpId")
+            or token_data.get("corp_id")
+            or settings.dingtalk_corp_id
+        )
         if not corp_id:
             raise DingTalkAuthError(
-                "DingTalk corp ID was not returned. Request scope 'openid corpid' and verify app permissions.",
+                "DingTalk corp ID was not returned. Set DINGTALK_CORP_ID or request scope 'openid corpid'.",
                 status_code=400,
             )
 
@@ -155,11 +181,15 @@ def dingtalk_callback(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
     except DingTalkAuthError as exc:
+        db.rollback()
+        logger.warning("DingTalk OAuth failed: %s", exc.message)
         return RedirectResponse(
             url=_frontend_callback_url(error="dingtalk_auth_failed", message=exc.message),
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
     except Exception:
+        db.rollback()
+        logger.exception("Unexpected error during DingTalk OAuth callback")
         return RedirectResponse(
             url=_frontend_callback_url(
                 error="dingtalk_auth_failed",

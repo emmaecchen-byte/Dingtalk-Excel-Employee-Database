@@ -188,6 +188,27 @@ class PendingUpdate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[Optional[int]] = mapped_column(ForeignKey("companies.id", ondelete="SET NULL"))
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="dingtalk")
+    endpoint: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    dingtalk_user_id: Mapped[Optional[str]] = mapped_column(String(100))
+    event_id: Mapped[Optional[str]] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    payload: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    headers: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    pending_update_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("pending_updates.id", ondelete="SET NULL")
+    )
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class SyncLog(Base):
     __tablename__ = "sync_logs"
 

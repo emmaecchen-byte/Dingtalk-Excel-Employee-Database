@@ -412,3 +412,65 @@ class MonthCloneResponse(BaseModel):
     version_number: Optional[int] = None
     target_year: int
     target_month: int
+
+
+class WebhookEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    company_id: Optional[int] = None
+    source: str
+    endpoint: str
+    event_type: str
+    dingtalk_user_id: Optional[str] = None
+    event_id: Optional[str] = None
+    status: str
+    payload: dict = Field(default_factory=dict)
+    error_message: Optional[str] = None
+    pending_update_id: Optional[int] = None
+    processed_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class WebhookEventListResponse(BaseModel):
+    events: List[WebhookEventResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class WebhookConfigResponse(BaseModel):
+    attendance_url: str
+    employee_url: str
+    legacy_attendance_url: str
+    webhook_secret_configured: bool
+    webhook_crypto_configured: bool
+    timestamp_max_skew_seconds: int
+    allowed_ips: List[str] = Field(default_factory=list)
+    demo_mode: bool
+    supported_event_types: List[str] = Field(default_factory=list)
+
+
+class WebhookReplayResponse(BaseModel):
+    success: bool
+    webhook_event_id: int
+    status: str
+    message: str
+
+
+class WebhookTestRequest(BaseModel):
+    user_id: str
+    event_type: str = "attendance_check"
+    event_time: Optional[str] = None
+    event_id: Optional[str] = None
+    work_date: Optional[str] = None
+    year: Optional[int] = Field(None, ge=2000, le=2100)
+    month: Optional[int] = Field(None, ge=1, le=12)
+    data: Optional[dict] = None
+
+
+class WebhookTestResponse(BaseModel):
+    success: bool
+    webhook_event_id: int
+    pending_update_id: int
+    pending_status: str
+    duplicate: bool = False
+    message: str

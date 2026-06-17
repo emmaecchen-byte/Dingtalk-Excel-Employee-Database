@@ -14,9 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.excel.field_utils import get_field_value
-from app.models import Company, Conflict, Employee, MonthlyAttendance, PendingUpdate
+from app.models import Company, Conflict, Employee, MonthlyAttendance, PendingUpdate, WebhookEvent
 from app.services.conflict_detector import check_for_conflicts_on_update
-from app.services.webhook_sync import SyncFieldUpdate, sync_attendance, sync_leaves
+from app.services.employee_sync import sync_employees_for_company
+from app.services.webhook_event_service import mark_webhook_event_result
+from app.services.webhook_sync import SyncFieldUpdate, sync_attendance, sync_leaves, sync_overtime
 from app.webhooks.dingtalk_crypto import DingTalkCallbackCrypto, DingTalkWebhookError
 from app.webhooks.signature import WebhookSignatureError, verify_webhook_signature
 
@@ -24,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 ATTENDANCE_EVENT_TYPES = frozenset(
     {
+        "attendance_check",
         "attendance_check_in",
         "attendance_check_out",
         "check_in",
@@ -38,6 +41,24 @@ LEAVE_EVENT_TYPES = frozenset(
         "leave_approved",
         "leave",
         "leave_apply",
+    }
+)
+OVERTIME_EVENT_TYPES = frozenset(
+    {
+        "overtime_approved",
+        "overtime_approval",
+        "overtime",
+        "overtime_apply",
+    }
+)
+EMPLOYEE_EVENT_TYPES = frozenset(
+    {
+        "employee_joined",
+        "employee_left",
+        "employee_changed",
+        "user_add_org",
+        "user_leave_org",
+        "user_modify_org",
     }
 )
 
@@ -327,6 +348,14 @@ def _apply_field_updates(
     return applied, conflicts, len(applied)
 
 
+@dataclass
+class FieldUpdateResolution:
+    year: int
+    month: int
+    field_updates: List[SyncFieldUpdate]
+    company_sync_only: bool = False
+
+
 def _resolve_field_updates(
     db: Session,
     *,
@@ -335,14 +364,21 @@ def _resolve_field_updates(
     event_type: str,
     data: Dict[str, Any],
     event_time: datetime,
-) -> Tuple[int, int, List[SyncFieldUpdate]]:
+) -> FieldUpdateResolution:
     year = int(data.get("year") or event_time.year)
     month = int(data.get("month") or event_time.month)
+    normalized_type = event_type.lower().strip()
+
+    if normalized_type in EMPLOYEE_EVENT_TYPES:
+        sync_employees_for_company(
+            db,
+            company,
+            root_dept_id=settings.dingtalk_root_department_id,
+        )
+        return FieldUpdateResolution(year=year, month=month, field_updates=[], company_sync_only=True)
 
     if not employee:
-        return year, month, []
-
-    normalized_type = event_type.lower().strip()
+        return FieldUpdateResolution(year=year, month=month, field_updates=[])
 
     if normalized_type in ATTENDANCE_EVENT_TYPES:
         work_date = (
@@ -350,35 +386,67 @@ def _resolve_field_updates(
             or data.get("date")
             or event_time.strftime("%Y-%m-%d")
         )
-        return year, month, sync_attendance(
-            db,
-            company=company,
-            employee=employee,
-            work_date=str(work_date),
-            webhook_data=data,
+        return FieldUpdateResolution(
+            year=year,
+            month=month,
+            field_updates=sync_attendance(
+                db,
+                company=company,
+                employee=employee,
+                work_date=str(work_date),
+                webhook_data=data,
+            ),
         )
 
     if normalized_type in LEAVE_EVENT_TYPES:
-        return year, month, sync_leaves(
-            db,
-            company=company,
-            employee=employee,
+        return FieldUpdateResolution(
             year=year,
             month=month,
-            webhook_data=data,
+            field_updates=sync_leaves(
+                db,
+                company=company,
+                employee=employee,
+                year=year,
+                month=month,
+                webhook_data=data,
+            ),
+        )
+
+    if normalized_type in OVERTIME_EVENT_TYPES:
+        return FieldUpdateResolution(
+            year=year,
+            month=month,
+            field_updates=sync_overtime(
+                db,
+                company=company,
+                employee=employee,
+                year=year,
+                month=month,
+                webhook_data=data,
+            ),
         )
 
     if data.get("field_name") or data.get("fieldName"):
         field_name = data.get("field_name") or data.get("fieldName")
         value = data.get("value") or data.get("dingtalk_value") or data.get("new_value")
         if field_name and value is not None:
-            return year, month, [SyncFieldUpdate(field_name=str(field_name), dingtalk_value=str(value))]
+            return FieldUpdateResolution(
+                year=year,
+                month=month,
+                field_updates=[SyncFieldUpdate(field_name=str(field_name), dingtalk_value=str(value))],
+            )
 
     logger.warning("Unhandled webhook event_type=%s for user=%s", event_type, employee.dingtalk_user_id)
-    return year, month, []
+    return FieldUpdateResolution(year=year, month=month, field_updates=[])
 
 
-def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProcessResult:
+def process_webhook_event(
+    db: Session,
+    payload: Dict[str, Any],
+    *,
+    webhook_event: Optional[WebhookEvent] = None,
+    skip_duplicate_check: bool = False,
+) -> WebhookProcessResult:
     """Process a normalized DingTalk webhook event."""
     user_id = (
         payload.get("user_id")
@@ -392,6 +460,10 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
     if not isinstance(data, dict):
         data = {}
 
+    normalized_type = event_type.lower().strip()
+    if not user_id and normalized_type not in EMPLOYEE_EVENT_TYPES:
+        raise DingTalkWebhookError("Webhook payload must include user_id")
+
     corp_id = (
         data.get("corp_id")
         or data.get("corpId")
@@ -400,11 +472,8 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
         or settings.dingtalk_corp_id
     )
 
-    if not user_id:
-        raise DingTalkWebhookError("Webhook payload must include user_id")
-
     event_time = _parse_event_time(str(event_time_raw) if event_time_raw else None)
-    event_id = _event_dedup_key(payload, user_id, event_type)
+    event_id = _event_dedup_key(payload, str(user_id or "company"), event_type)
 
     logger.info(
         "Processing DingTalk webhook: user_id=%s event_type=%s event_time=%s event_id=%s",
@@ -418,19 +487,32 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
     if not company:
         raise DingTalkWebhookError("Company not found for webhook event")
 
-    duplicate = _find_duplicate_pending(
-        db,
-        company_id=company.id,
-        dingtalk_user_id=user_id,
-        event_type=event_type,
-        event_id=event_id,
-    )
+    if webhook_event and webhook_event.company_id is None:
+        webhook_event.company_id = company.id
+
+    duplicate = None
+    if not skip_duplicate_check:
+        duplicate = _find_duplicate_pending(
+            db,
+            company_id=company.id,
+            dingtalk_user_id=str(user_id or "company"),
+            event_type=event_type,
+            event_id=event_id,
+        )
     if duplicate:
         logger.info("Duplicate webhook event ignored: event_id=%s pending_id=%s", event_id, duplicate.id)
+        if webhook_event:
+            mark_webhook_event_result(
+                db,
+                webhook_event,
+                status="duplicate",
+                pending_update_id=duplicate.id,
+            )
+            db.commit()
         return WebhookProcessResult(pending=duplicate, duplicate=True)
 
-    employee = _resolve_employee(db, company.id, user_id)
-    year, month, field_updates = _resolve_field_updates(
+    employee = _resolve_employee(db, company.id, str(user_id)) if user_id else None
+    resolution = _resolve_field_updates(
         db,
         company=company,
         employee=employee,
@@ -438,6 +520,9 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
         data=data,
         event_time=event_time,
     )
+    year = resolution.year
+    month = resolution.month
+    field_updates = resolution.field_updates
 
     primary_field = field_updates[0].field_name if field_updates else "webhook_event"
     primary_value = field_updates[0].dingtalk_value if field_updates else None
@@ -447,7 +532,7 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
         year=year,
         month=month,
         employee_id=employee.id if employee else None,
-        dingtalk_user_id=user_id,
+        dingtalk_user_id=str(user_id or "company"),
         event_type=event_type,
         field_name=primary_field,
         dingtalk_value=primary_value,
@@ -457,13 +542,38 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
             "event_id": event_id,
             "normalized_at": datetime.utcnow().isoformat(),
             "field_updates": [item.to_dict() for item in field_updates],
+            "company_sync_only": resolution.company_sync_only,
         },
     )
     db.add(pending)
     db.flush()
 
+    if resolution.company_sync_only:
+        pending.status = "processed"
+        pending.processed_at = datetime.utcnow()
+        if webhook_event:
+            mark_webhook_event_result(
+                db,
+                webhook_event,
+                status="processed",
+                pending_update_id=pending.id,
+            )
+        db.commit()
+        db.refresh(pending)
+        logger.info("Webhook company sync processed: pending_id=%s", pending.id)
+        return WebhookProcessResult(pending=pending)
+
     if not employee:
         logger.warning("Webhook employee not found: %s", user_id)
+        pending.status = "processed"
+        pending.processed_at = datetime.utcnow()
+        if webhook_event:
+            mark_webhook_event_result(
+                db,
+                webhook_event,
+                status="processed",
+                pending_update_id=pending.id,
+            )
         db.commit()
         db.refresh(pending)
         return WebhookProcessResult(pending=pending)
@@ -489,13 +599,24 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
         pending.status = "conflicted"
         pending.conflict_id = conflicts[0].id
         pending.previous_value = applied[0]["previous_value"] if applied else None
+        final_status = "processed"
     elif applied_count > 0:
         pending.status = "processed"
         pending.processed_at = now
         pending.previous_value = applied[0].get("previous_value")
+        final_status = "processed"
     else:
         pending.status = "processed"
         pending.processed_at = now
+        final_status = "processed"
+
+    if webhook_event:
+        mark_webhook_event_result(
+            db,
+            webhook_event,
+            status=final_status,
+            pending_update_id=pending.id,
+        )
 
     db.commit()
     db.refresh(pending)
@@ -508,6 +629,43 @@ def process_webhook_event(db: Session, payload: Dict[str, Any]) -> WebhookProces
         len(conflicts),
     )
     return WebhookProcessResult(pending=pending)
+
+
+def run_webhook_background(webhook_event_id: int, *, skip_duplicate_check: bool = False) -> None:
+    """Background worker entry point for queued webhook events."""
+    from app.database import SessionLocal
+    from app.services.webhook_event_service import get_webhook_event, mark_webhook_event_processing
+
+    db = SessionLocal()
+    try:
+        event = get_webhook_event(db, webhook_event_id)
+        if not event:
+            logger.error("Webhook event id=%s not found for background processing", webhook_event_id)
+            return
+
+        mark_webhook_event_processing(db, event)
+        db.commit()
+
+        process_webhook_event(
+            db,
+            event.payload,
+            webhook_event=event,
+            skip_duplicate_check=skip_duplicate_check,
+        )
+    except Exception as exc:
+        logger.exception("Webhook background processing failed for event_id=%s", webhook_event_id)
+        db.rollback()
+        event = get_webhook_event(db, webhook_event_id)
+        if event:
+            mark_webhook_event_result(
+                db,
+                event,
+                status="failed",
+                error_message=str(exc),
+            )
+            db.commit()
+    finally:
+        db.close()
 
 
 # Backward-compatible aliases used by older imports.

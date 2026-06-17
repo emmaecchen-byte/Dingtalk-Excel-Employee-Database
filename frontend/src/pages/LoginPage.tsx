@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Divider, Form, Input, Space, Typography } from "antd";
 import { DingdingOutlined, LockOutlined, MailOutlined } from "@ant-design/icons";
 import { useAuth } from "../auth/AuthContext";
-import { getDingTalkLoginUrl } from "../auth/api";
+import { fetchDingTalkOAuthStatus, getDingTalkLoginUrl } from "../auth/api";
 import { useLanguage } from "../i18n/LanguageContext";
 
 const { Title, Text } = Typography;
@@ -15,8 +15,21 @@ export default function LoginPage() {
   const location = useLocation();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dingtalkEnabled, setDingtalkEnabled] = useState<boolean | null>(null);
+  const [dingtalkMissing, setDingtalkMissing] = useState<string[]>([]);
 
   const from = (location.state as { from?: string } | null)?.from || "/";
+
+  useEffect(() => {
+    fetchDingTalkOAuthStatus()
+      .then((status) => {
+        setDingtalkEnabled(status.enabled);
+        setDingtalkMissing(status.missing_settings);
+      })
+      .catch(() => {
+        setDingtalkEnabled(false);
+      });
+  }, []);
 
   if (!loading && isAuthenticated) {
     return <Navigate to={from} replace />;
@@ -85,9 +98,20 @@ export default function LoginPage() {
 
           <Divider>{t("or")}</Divider>
 
+          {dingtalkEnabled === false && dingtalkMissing.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              message={t("dingtalkNotConfigured")}
+              description={dingtalkMissing.join(", ")}
+            />
+          )}
+
           <Button
             block
             icon={<DingdingOutlined />}
+            disabled={dingtalkEnabled === false}
+            loading={dingtalkEnabled === null}
             onClick={() => {
               window.location.href = getDingTalkLoginUrl();
             }}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
 from typing import Mapping, Optional
 
 from app.config import settings
@@ -60,6 +61,38 @@ def compute_webhook_signature(secret: str, timestamp: str, nonce: str, body: byt
     return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
+def _timestamp_to_epoch_seconds(timestamp: str) -> int:
+    try:
+        value = int(timestamp.strip())
+    except (TypeError, ValueError) as exc:
+        raise WebhookSignatureError("Invalid webhook timestamp") from exc
+    if value >= 1_000_000_000_000:
+        return value // 1000
+    return value
+
+
+def verify_webhook_timestamp(
+    timestamp: str,
+    *,
+    max_skew_seconds: Optional[int] = None,
+) -> None:
+    """Reject replayed webhooks when timestamp is outside the allowed window."""
+    skew_limit = max_skew_seconds if max_skew_seconds is not None else settings.webhook_timestamp_max_skew_seconds
+    if skew_limit <= 0:
+        return
+
+    event_epoch = _timestamp_to_epoch_seconds(timestamp)
+    now_epoch = int(time.time())
+    if abs(now_epoch - event_epoch) > skew_limit:
+        logger.warning(
+            "Webhook timestamp rejected: event=%s now=%s skew_limit=%s",
+            event_epoch,
+            now_epoch,
+            skew_limit,
+        )
+        raise WebhookSignatureError("Webhook timestamp outside allowed window")
+
+
 def verify_webhook_signature(
     *,
     headers: Mapping[str, str],
@@ -81,6 +114,8 @@ def verify_webhook_signature(
     timestamp, nonce, signature = extract_signature_headers(headers)
     if not timestamp or not nonce or not signature:
         raise WebhookSignatureError("Missing webhook signature headers (timestamp, nonce, signature)")
+
+    verify_webhook_timestamp(timestamp)
 
     expected = compute_webhook_signature(webhook_secret, timestamp, nonce, body)
     if not hmac.compare_digest(expected, signature):

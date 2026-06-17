@@ -1,12 +1,15 @@
+import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
 import jwt
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class DingTalkAuthError(Exception):
@@ -22,11 +25,18 @@ class DingTalkClient:
     USER_PROFILE_URL = "https://api.dingtalk.com/v1.0/contact/users/me"
 
     def is_configured(self) -> bool:
-        return bool(
-            settings.dingtalk_client_id
-            and settings.dingtalk_client_secret
-            and settings.dingtalk_redirect_uri
-        )
+        return not self.missing_settings()
+
+    def missing_settings(self) -> List[str]:
+        return settings.dingtalk_oauth_missing_settings()
+
+    def ensure_configured(self) -> None:
+        missing = self.missing_settings()
+        if missing:
+            raise DingTalkAuthError(
+                "DingTalk OAuth is not configured. Set: " + ", ".join(missing),
+                status_code=503,
+            )
 
     def create_state(self) -> str:
         payload = {
@@ -49,11 +59,7 @@ class DingTalkClient:
             raise DingTalkAuthError("Invalid OAuth state parameter", status_code=400)
 
     def build_authorize_url(self) -> str:
-        if not self.is_configured():
-            raise DingTalkAuthError(
-                "DingTalk OAuth is not configured. Set DINGTALK_CLIENT_ID, DINGTALK_CLIENT_SECRET, and DINGTALK_REDIRECT_URI.",
-                status_code=503,
-            )
+        self.ensure_configured()
 
         params = {
             "client_id": settings.dingtalk_client_id,
@@ -68,35 +74,54 @@ class DingTalkClient:
         return f"{self.AUTHORIZE_URL}?{urlencode(params)}"
 
     def exchange_auth_code(self, auth_code: str) -> Dict[str, Any]:
+        self.ensure_configured()
         body = {
             "clientId": settings.dingtalk_client_id,
             "clientSecret": settings.dingtalk_client_secret,
             "code": auth_code,
             "grantType": "authorization_code",
         }
-        return self._post_json(self.USER_ACCESS_TOKEN_URL, body)
+        return self._normalize_token_payload(self._post_json(self.USER_ACCESS_TOKEN_URL, body))
 
     def refresh_user_access_token(self, refresh_token: str) -> Dict[str, Any]:
+        self.ensure_configured()
         body = {
             "clientId": settings.dingtalk_client_id,
             "clientSecret": settings.dingtalk_client_secret,
             "refreshToken": refresh_token,
             "grantType": "refresh_token",
         }
-        return self._post_json(self.USER_ACCESS_TOKEN_URL, body)
+        return self._normalize_token_payload(self._post_json(self.USER_ACCESS_TOKEN_URL, body))
 
     def get_user_profile(self, access_token: str) -> Dict[str, Any]:
-        return self._get_json(
+        payload = self._get_json(
             self.USER_PROFILE_URL,
             headers={"x-acs-dingtalk-access-token": access_token},
         )
+        return self._normalize_profile_payload(payload)
+
+    def _normalize_token_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Accept flat or nested DingTalk token responses."""
+        if "accessToken" in data or "access_token" in data:
+            return data
+        nested = data.get("result") or data.get("data")
+        if isinstance(nested, dict):
+            return nested
+        return data
+
+    def _normalize_profile_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        nested = data.get("result") or data.get("data")
+        if isinstance(nested, dict) and not data.get("openId") and not data.get("unionId"):
+            return nested
+        return data
 
     def _post_json(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
         try:
             with httpx.Client(timeout=15.0) as client:
                 response = client.post(url, json=body)
         except httpx.RequestError as exc:
-            raise DingTalkAuthError(f"Failed to reach DingTalk API: {exc}", status_code=502)
+            logger.warning("DingTalk POST %s failed: %s", url, exc)
+            raise DingTalkAuthError(f"Failed to reach DingTalk API: {exc}", status_code=502) from exc
 
         return self._parse_response(response)
 
@@ -105,7 +130,8 @@ class DingTalkClient:
             with httpx.Client(timeout=15.0) as client:
                 response = client.get(url, headers=headers)
         except httpx.RequestError as exc:
-            raise DingTalkAuthError(f"Failed to reach DingTalk API: {exc}", status_code=502)
+            logger.warning("DingTalk GET %s failed: %s", url, exc)
+            raise DingTalkAuthError(f"Failed to reach DingTalk API: {exc}", status_code=502) from exc
 
         return self._parse_response(response)
 
@@ -122,8 +148,13 @@ class DingTalkClient:
                 or data.get("errmsg")
                 or "DingTalk API request failed"
             )
+            logger.warning(
+                "DingTalk API error status=%s body=%s",
+                response.status_code,
+                data,
+            )
             if response.status_code in {400, 401} and any(
-                keyword in message.lower()
+                keyword in str(message).lower()
                 for keyword in ("expired", "invalid", "code", "token")
             ):
                 raise DingTalkAuthError(message, status_code=401)

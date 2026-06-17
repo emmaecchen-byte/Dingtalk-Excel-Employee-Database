@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     def dingtalk_enabled(self) -> bool:
         return bool(self.dingtalk_client_id and self.dingtalk_client_secret and self.dingtalk_redirect_uri)
 
+    def dingtalk_oauth_missing_settings(self) -> list[str]:
+        """Return env vars that must be set before OAuth can run."""
+        missing: list[str] = []
+        if not self.dingtalk_client_id:
+            missing.append("DINGTALK_CLIENT_ID")
+        if not self.dingtalk_client_secret:
+            missing.append("DINGTALK_CLIENT_SECRET")
+        if not self.dingtalk_redirect_uri:
+            missing.append("DINGTALK_REDIRECT_URI")
+        if not self.frontend_url:
+            missing.append("FRONTEND_URL")
+        return missing
+
     # DingTalk employee sync
     dingtalk_root_department_id: int = 1
     dingtalk_user_page_size: int = 100
@@ -46,6 +59,10 @@ class Settings(BaseSettings):
     dingtalk_webhook_token: str = ""
     dingtalk_webhook_aes_key: str = ""
     dingtalk_webhook_owner_key: str = ""
+
+    # Webhook security
+    webhook_timestamp_max_skew_seconds: int = 300
+    webhook_allowed_ips: str = ""
 
     @property
     def dingtalk_webhook_configured(self) -> bool:

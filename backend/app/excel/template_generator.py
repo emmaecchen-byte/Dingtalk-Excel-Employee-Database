@@ -24,9 +24,11 @@ COMPANY_NAME = "创崎新能源技术（上海）有限公司"
 
 TEMPLATE_SHEETS = ("签字", "情况说明", "月度汇总", "加班结算加班工资")
 
-# 签字 sheet layout
+# 签字 sheet layout (matches spec: title / spacer / headers / spacer / legend / data)
+SIGN_TITLE_ROW = 1
+SIGN_SPACER_ROW_1 = 2
 SIGN_HEADER_ROW = 3
-SIGN_DATE_ROW = 4
+SIGN_SPACER_ROW_2 = 4
 SIGN_LEGEND_ROW = 5
 SIGN_DATA_START_ROW = 6
 
@@ -36,8 +38,21 @@ SIGN_DAY_COUNT = 31
 
 SIGN_SUMMARY_START_COL = 36  # AJ
 SIGN_SUMMARY_END_COL = 44  # AR
-SIGN_LEGEND_END_COL = 45  # AS (AJ5–AS5)
-SIGN_ABSENT_COL = 46  # AT = 应出勤 - 出勤
+SIGN_LEGEND_ML_COL = 45  # AS row 5: ML (婚假) label
+SIGN_ABSENT_COL = 45  # AS data rows: 合计 = 应出勤 - 出勤
+
+# Row 3 summary headers above COUNTIF columns AJ–AR and 合计 in AS
+SIGN_SUMMARY_HEADER_LABELS: Tuple[str, ...] = (
+    "出勤合计",
+    "事假",
+    "调休",
+    "出差",
+    "病假",
+    "福利假",
+    "年假",
+    "产假/陪产假",
+    "丧假",
+)
 
 # Legend symbols in AJ5–AS5 (symbol only in cell; label in comment / adjacent doc)
 SIGN_LEGEND_SYMBOLS: Tuple[Tuple[str, str], ...] = (
@@ -58,13 +73,11 @@ SIGN_COUNT_SYMBOLS: Tuple[str, ...] = tuple(symbol for symbol, _ in SIGN_LEGEND_
 # 月度汇总 — name in A, daily status B–AF (31 days)
 MONTHLY_TITLE_ROW = 1
 MONTHLY_GENERATED_ROW = 2
-MONTHLY_SECTION_ROW = 3
-MONTHLY_HEADER_ROW = 4
-MONTHLY_DATA_START_ROW = 5
+MONTHLY_HEADER_ROW = 3
+MONTHLY_DATA_START_ROW = 4
 MONTHLY_INFO_END_COL = 1  # A = 姓名
 MONTHLY_DAILY_START_COL = 2  # B = day 1
 MONTHLY_DAILY_END_COL = 32  # AF = day 31
-MONTHLY_DATE_HEADER_ROW = 1  # B1–AF1 day-of-month / 六 / 日
 # Legacy parser columns (not written to web-export workbooks)
 MONTHLY_META_ANOMALY_COL = 33  # AG
 MONTHLY_META_SUPPLEMENT_COL = 34  # AH
@@ -277,31 +290,9 @@ def configure_monthly_summary_headers(
     *,
     generated_at: Optional[datetime] = None,
 ) -> None:
-    """Apply rows 1–4 for the 月度汇总 sheet (title, timestamp, section labels, column headers)."""
-    days_in_month = calendar.monthrange(year, month)[1]
-
+    """Apply rows 1–3 for the 月度汇总 sheet (title, timestamp, 姓名 + day headers)."""
     write_monthly_summary_title_row(ws, year, month)
     write_monthly_summary_timestamp_row(ws, generated_at=generated_at)
-
-    # Row 1: B1–AF1 date headers alongside title in A1
-    write_monthly_day_column_headers(ws, year, month, MONTHLY_DATE_HEADER_ROW)
-
-    ws.cell(row=MONTHLY_SECTION_ROW, column=1, value="姓名")
-    section = ws.cell(row=MONTHLY_SECTION_ROW, column=1)
-    section.font = HEADER_FONT
-    section.fill = HEADER_FILL
-    section.alignment = CENTER
-
-    ws.merge_cells(
-        start_row=MONTHLY_SECTION_ROW,
-        start_column=MONTHLY_DAILY_START_COL,
-        end_row=MONTHLY_SECTION_ROW,
-        end_column=MONTHLY_DAILY_END_COL,
-    )
-    daily_section = ws.cell(row=MONTHLY_SECTION_ROW, column=MONTHLY_DAILY_START_COL, value="每日考勤状态")
-    daily_section.font = HEADER_FONT
-    daily_section.fill = HEADER_FILL
-    daily_section.alignment = CENTER
 
     ws.cell(row=MONTHLY_HEADER_ROW, column=1, value="姓名")
     name_header = ws.cell(row=MONTHLY_HEADER_ROW, column=1)
@@ -310,7 +301,6 @@ def configure_monthly_summary_headers(
     name_header.alignment = LEFT
     name_header.border = THIN_BORDER
 
-    # Row 4: repeat date headers under column header row for the data table
     write_monthly_day_column_headers(ws, year, month, MONTHLY_HEADER_ROW)
 
 
@@ -349,9 +339,7 @@ def format_monthly_summary_sheet(
             cell.border = THIN_BORDER
 
             if col <= MONTHLY_INFO_END_COL:
-                if row == MONTHLY_SECTION_ROW:
-                    cell.alignment = CENTER
-                elif row in (MONTHLY_TITLE_ROW, MONTHLY_GENERATED_ROW):
+                if row in (MONTHLY_TITLE_ROW, MONTHLY_GENERATED_ROW):
                     cell.alignment = LEFT
                     if row == MONTHLY_TITLE_ROW and col == 1:
                         cell.font = TITLE_FONT
@@ -375,9 +363,9 @@ def format_monthly_summary_sheet(
                 cell.fill = OUT_OF_MONTH_FILL
             elif is_calendar_weekend(year, month, day):
                 cell.fill = WEEKEND_FILL
-                if row in (MONTHLY_DATE_HEADER_ROW, MONTHLY_HEADER_ROW):
+                if row == MONTHLY_HEADER_ROW:
                     cell.font = HEADER_FONT
-            elif row in (MONTHLY_DATE_HEADER_ROW, MONTHLY_HEADER_ROW):
+            elif row == MONTHLY_HEADER_ROW:
                 cell.fill = HEADER_FILL
                 cell.font = HEADER_FONT
 
@@ -410,7 +398,7 @@ def sign_countif_formula(data_row: int, legend_col_index: int) -> str:
 
 
 def sign_absent_formula(data_row: int, work_days: int) -> str:
-    """AT column: working days minus attendance count in AJ (缺勤 = 应出勤 - 出勤)."""
+    """AS column: working days minus attendance count in AJ (合计 = 应出勤 - 出勤)."""
     aj_col = _summary_col_sign(0)
     return f"={work_days}-{aj_col}{data_row}"
 
@@ -421,7 +409,7 @@ def write_sign_sheet_employee_summary_formulas(
     *,
     work_days: int,
 ) -> None:
-    """Write AJ–AR COUNTIF formulas and AT absent formula for one 签字 data row."""
+    """Write AJ–AR COUNTIF formulas and AS 合计 formula for one 签字 data row."""
     for idx in range(len(SIGN_COUNT_SYMBOLS)):
         col = SIGN_SUMMARY_START_COL + idx
         cell = ws.cell(row=data_row, column=col, value=sign_countif_formula(data_row, idx))
@@ -902,29 +890,44 @@ def sign_legend_cell_text(symbol: str, label: str) -> str:
 
 
 def write_sign_sheet_legend(ws) -> None:
-    """Write symbol legend to AJ5–AS5 on the 签字 sheet.
-
-    AJ–AR store the symbol only (COUNTIF criteria in row 5). AS stores the full label.
-    """
-    for idx, (symbol, label) in enumerate(SIGN_LEGEND_SYMBOLS):
+    """Write symbol legend to AJ5–AR5; AS5 = ML (婚假) label."""
+    for idx, (symbol, _label) in enumerate(SIGN_LEGEND_SYMBOLS):
+        if idx >= len(SIGN_COUNT_SYMBOLS):
+            break
         col = SIGN_SUMMARY_START_COL + idx
-        if idx < len(SIGN_COUNT_SYMBOLS):
-            value = symbol
-        else:
-            value = sign_legend_cell_text(symbol, label)
-        cell = ws.cell(row=SIGN_LEGEND_ROW, column=col, value=value)
+        cell = ws.cell(row=SIGN_LEGEND_ROW, column=col, value=symbol)
         cell.font = HEADER_FONT
         cell.alignment = CENTER
         cell.fill = HEADER_FILL
 
+    ml_symbol, ml_label = SIGN_LEGEND_SYMBOLS[len(SIGN_COUNT_SYMBOLS)]
+    ml_cell = ws.cell(
+        row=SIGN_LEGEND_ROW,
+        column=SIGN_LEGEND_ML_COL,
+        value=sign_legend_cell_text(ml_symbol, ml_label),
+    )
+    ml_cell.font = HEADER_FONT
+    ml_cell.alignment = CENTER
+    ml_cell.fill = HEADER_FILL
 
-def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmployee]) -> None:
+
+def write_sign_sheet_headers(ws, year: int, month: int) -> None:
+    """Rows 1–5: title, spacers, column headers, symbol legend."""
     days_in_month = calendar.monthrange(year, month)[1]
-    work_days = count_month_work_days(year, month)
-    last_col = max(SIGN_ABSENT_COL, SIGN_SUMMARY_END_COL + 6)
+    last_col = max(SIGN_ABSENT_COL, SIGN_SUMMARY_END_COL + 2)
 
-    _merge_title(ws, 1, 1, last_col, f"{COMPANY_NAME}员工{year}年{month}月考勤表")
-    ws.row_dimensions[1].height = 28
+    _merge_title(
+        ws,
+        SIGN_TITLE_ROW,
+        1,
+        last_col,
+        f"{COMPANY_NAME}员工{year}年{month}月考勤表",
+    )
+    ws.row_dimensions[SIGN_TITLE_ROW].height = 28
+
+    for spacer_row in (SIGN_SPACER_ROW_1, SIGN_SPACER_ROW_2):
+        for col in range(1, last_col + 1):
+            ws.cell(row=spacer_row, column=col, value=None)
 
     for col, label in ((1, "签名"), (2, "姓名"), (3, "时间")):
         cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=label)
@@ -935,31 +938,46 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
     for day in range(1, SIGN_DAY_COUNT + 1):
         col = SIGN_DAY_START_COL + day - 1
         value = day if day <= days_in_month else f"{day}*"
-        cell = ws.cell(row=SIGN_DATE_ROW, column=col, value=value)
+        cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=value)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
         if day > days_in_month:
             cell.font = Font(name="宋体", size=10, bold=True, color="999999")
 
+    for idx, label in enumerate(SIGN_SUMMARY_HEADER_LABELS):
+        col = SIGN_SUMMARY_START_COL + idx
+        cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=label)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = CENTER
+
+    total_header = ws.cell(row=SIGN_HEADER_ROW, column=SIGN_ABSENT_COL, value="合计")
+    total_header.font = HEADER_FONT
+    total_header.fill = HEADER_FILL
+    total_header.alignment = CENTER
+
     write_sign_sheet_legend(ws)
-    absent_header = ws.cell(row=SIGN_DATE_ROW, column=SIGN_ABSENT_COL, value="缺勤")
-    absent_header.font = HEADER_FONT
-    absent_header.fill = HEADER_FILL
-    absent_header.alignment = CENTER
+
+
+def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmployee]) -> None:
+    days_in_month = calendar.monthrange(year, month)[1]
+    work_days = count_month_work_days(year, month)
+
+    write_sign_sheet_headers(ws, year, month)
 
     current_row = SIGN_DATA_START_ROW
     for employee in employees:
         am_row = current_row
         pm_row = current_row + 1
+        employee_name = employee.name or ""
 
-        ws.merge_cells(start_row=am_row, start_column=1, end_row=pm_row, end_column=1)
-        ws.cell(row=am_row, column=1).alignment = CENTER
-
-        ws.merge_cells(start_row=am_row, start_column=2, end_row=pm_row, end_column=2)
-        name_cell = ws.cell(row=am_row, column=2, value=employee.name or None)
-        name_cell.font = BODY_FONT
-        name_cell.alignment = CENTER
+        ws.cell(row=am_row, column=1, value=None)
+        ws.cell(row=pm_row, column=1, value=None)
+        for row in (am_row, pm_row):
+            name_cell = ws.cell(row=row, column=2, value=employee_name or None)
+            name_cell.font = BODY_FONT
+            name_cell.alignment = CENTER
 
         ws.cell(row=am_row, column=3, value="上午").alignment = CENTER
         ws.cell(row=pm_row, column=3, value="下午").alignment = CENTER

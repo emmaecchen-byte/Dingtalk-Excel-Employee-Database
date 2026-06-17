@@ -24,6 +24,7 @@ import {
   UploadOutlined,
   UserAddOutlined,
   UserOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../auth/AuthContext";
 import CloneMonthModal from "../components/CloneMonthModal";
@@ -152,6 +153,13 @@ function DashboardContent() {
             <Link to="/register">
               <Button type="text" icon={<UserAddOutlined />} style={{ color: "#fff" }}>
                 {t("registerUser")}
+              </Button>
+            </Link>
+          )}
+          {isHrAdmin && (
+            <Link to="/webhooks">
+              <Button type="text" icon={<ApiOutlined />} style={{ color: "#fff" }}>
+                Webhooks
               </Button>
             </Link>
           )}

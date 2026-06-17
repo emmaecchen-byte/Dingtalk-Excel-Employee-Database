@@ -6,6 +6,7 @@ import AttendanceSheetsPage from "./pages/AttendanceSheetsPage";
 import DingTalkCallbackPage from "./pages/DingTalkCallbackPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import WebhooksPage from "./pages/WebhooksPage";
 import { queryClient } from "./lib/queryClient";
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
           />
           <Route element={<ProtectedRoute allowedRoles={["hr_admin"]} />}>
             <Route path="/register" element={<RegisterPage />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

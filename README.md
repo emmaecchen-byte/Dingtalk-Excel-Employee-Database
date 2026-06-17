@@ -31,7 +31,7 @@ Open: http://localhost:5173
 - HR dashboard with monthly attendance overview
 - Demo employee data (May 2026)
 - Sync button (demo mode, no DingTalk credentials required)
-- Excel download (simplified monthly summary sheet)
+- Excel download (four-sheet workbook: 签字, 情况说明, 月度汇总, 加班结算加班工资)
 - REST API matching spec endpoints (partial)
 
 ## Demo Mode

@@ -113,6 +113,17 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
   return data;
 }
 
+export interface DingTalkOAuthStatus {
+  enabled: boolean;
+  authorize_url?: string | null;
+  missing_settings: string[];
+}
+
+export async function fetchDingTalkOAuthStatus(): Promise<DingTalkOAuthStatus> {
+  const { data } = await client.get<DingTalkOAuthStatus>("/auth/dingtalk/status");
+  return data;
+}
+
 export async function registerUser(payload: RegisterPayload): Promise<AuthUser> {
   const { data } = await client.post<AuthUser>("/auth/register", payload);
   return data;

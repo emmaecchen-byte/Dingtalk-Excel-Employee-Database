@@ -1,24 +1,16 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.webhooks.dingtalk_crypto import DingTalkWebhookError
-from app.webhooks.processor import build_webhook_response, parse_request_body, process_webhook_event
-from app.webhooks.signature import WebhookSignatureError
+from app.routers.webhooks_api import _receive_dingtalk_webhook, _webhook_error_response
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/webhook", tags=["webhooks"])
-
-
-def _webhook_error_response(exc: Exception, status_code: int) -> HTTPException:
-    message = getattr(exc, "message", str(exc))
-    logger.error("DingTalk webhook error: %s", message)
-    return HTTPException(status_code=status_code, detail=message)
+router = APIRouter(prefix="/webhook", tags=["webhooks-legacy"])
 
 
 @router.get("/status")
@@ -29,70 +21,58 @@ def webhook_status():
         "webhook_crypto_configured": settings.dingtalk_webhook_configured,
         "demo_mode": settings.demo_mode,
         "endpoints": [
+            "/api/webhooks/dingtalk/attendance",
+            "/api/webhooks/dingtalk/employee",
             "/webhook/dingtalk/attendance",
             "/webhook/dingtalk/leave",
         ],
     }
 
 
-async def _handle_dingtalk_webhook(
+async def _handle_dingtalk_webhook_legacy(
     *,
     request: Request,
     db: Session,
+    background_tasks: BackgroundTasks,
+    endpoint: str,
     default_event_type: Optional[str],
     msg_signature: Optional[str],
     timestamp: Optional[str],
     nonce: Optional[str],
 ) -> Dict[str, Any]:
-    raw_body = await request.body()
-    logger.info(
-        "Received DingTalk webhook on %s (%s bytes)",
-        request.url.path,
-        len(raw_body),
-    )
-
     try:
-        payload = parse_request_body(
-            raw_body=raw_body,
-            headers=request.headers,
-            query_msg_signature=msg_signature,
-            query_timestamp=timestamp,
-            query_nonce=nonce,
+        return await _receive_dingtalk_webhook(
+            request=request,
+            db=db,
+            background_tasks=background_tasks,
+            endpoint=endpoint,
+            default_event_type=default_event_type,
+            msg_signature=msg_signature,
+            timestamp=timestamp,
+            nonce=nonce,
         )
-    except WebhookSignatureError as exc:
-        raise _webhook_error_response(exc, status.HTTP_401_UNAUTHORIZED)
-    except DingTalkWebhookError as exc:
-        raise _webhook_error_response(exc, status.HTTP_400_BAD_REQUEST)
-
-    if default_event_type and not payload.get("event_type"):
-        payload["event_type"] = default_event_type
-
-    result = process_webhook_event(db, payload)
-    response = build_webhook_response()
-    response["pending_update_id"] = result.pending.id
-    response["pending_status"] = result.pending.status
-    response["duplicate"] = result.duplicate
-    return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _webhook_error_response(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @router.post("/dingtalk/attendance", status_code=status.HTTP_200_OK)
 async def dingtalk_attendance_webhook(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     msg_signature: Optional[str] = Query(None, alias="msg_signature"),
     timestamp: Optional[str] = Query(None),
     nonce: Optional[str] = Query(None),
 ):
-    """
-    Real-time DingTalk attendance webhook listener.
-
-    Expects JSON body: ``{ user_id, event_type, event_time, data }``.
-    Verifies HMAC signature from headers using ``DINGTALK_WEBHOOK_SECRET``.
-    """
-    result = await _handle_dingtalk_webhook(
+    """Legacy attendance webhook route; delegates to /api/webhooks handler."""
+    result = await _handle_dingtalk_webhook_legacy(
         request=request,
         db=db,
+        background_tasks=background_tasks,
+        endpoint="attendance",
         default_event_type=None,
         msg_signature=msg_signature,
         timestamp=timestamp,
@@ -106,16 +86,19 @@ async def dingtalk_attendance_webhook(
 async def dingtalk_leave_webhook(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     msg_signature: Optional[str] = Query(None, alias="msg_signature"),
     timestamp: Optional[str] = Query(None),
     nonce: Optional[str] = Query(None),
 ):
-    """Legacy leave webhook route; delegates to the shared processor."""
-    result = await _handle_dingtalk_webhook(
+    """Legacy leave webhook route."""
+    result = await _handle_dingtalk_webhook_legacy(
         request=request,
         db=db,
-        default_event_type="leave_approval",
+        background_tasks=background_tasks,
+        endpoint="attendance",
+        default_event_type="leave_approved",
         msg_signature=msg_signature,
         timestamp=timestamp,
         nonce=nonce,

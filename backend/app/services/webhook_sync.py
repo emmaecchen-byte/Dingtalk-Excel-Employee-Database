@@ -16,11 +16,14 @@ from app.services.dingtalk_api import DingTalkAPIError, dingtalk_corp_client
 from app.services.leave_overtime_sync import (
     _classify_leave,
     _collect_month_approvals,
+    _daily_overtime_from_approvals,
+    _daily_overtime_from_report,
     _format_api_datetime,
     _get_or_create_monthly_record,
     _minutes_to_hours,
     _parse_duration_to_hours,
     _sum_leave_hours_from_report,
+    apply_daily_overtime,
     month_bounds,
 )
 
@@ -250,3 +253,63 @@ def sync_leaves(
         len(updates),
     )
     return updates
+
+
+def sync_overtime(
+    db: Session,
+    *,
+    company: Company,
+    employee: Employee,
+    year: int,
+    month: int,
+    webhook_data: Optional[Dict[str, Any]] = None,
+) -> List[SyncFieldUpdate]:
+    """Sync overtime totals for one employee for the given month."""
+    if not employee.dingtalk_user_id:
+        return []
+
+    record = _get_or_create_monthly_record(db, company.id, employee.id, year, month)
+    previous_total = str(record.total_overtime_hours or 0)
+    from_date, to_date, _ = month_bounds(year, month)
+    daily: Dict[int, float] = {}
+
+    if dingtalk_corp_client.is_configured():
+        approvals = _collect_month_approvals(employee.dingtalk_user_id, year, month, biz_type=1)
+        daily = _daily_overtime_from_report(
+            employee.dingtalk_user_id,
+            from_date,
+            to_date,
+            year,
+            month,
+        )
+        if not daily and approvals:
+            daily = _daily_overtime_from_approvals(
+                employee.dingtalk_user_id,
+                approvals,
+                year,
+                month,
+            )
+    elif webhook_data:
+        for day in range(1, 32):
+            key = f"overtime_day_{day}"
+            if key in webhook_data and webhook_data[key] is not None:
+                daily[day] = float(webhook_data[key])
+
+    new_total = apply_daily_overtime(record, daily, year, month)
+    new_total_str = str(new_total)
+    if previous_total != new_total_str:
+        return [
+            SyncFieldUpdate(
+                field_name="total_overtime_hours",
+                dingtalk_value=new_total_str,
+                previous_value=previous_total,
+            )
+        ]
+
+    logger.info(
+        "Overtime sync for employee_id=%s period=%s-%02d produced no total change",
+        employee.id,
+        year,
+        month,
+    )
+    return []

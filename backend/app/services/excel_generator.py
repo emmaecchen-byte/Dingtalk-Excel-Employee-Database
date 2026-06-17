@@ -43,6 +43,8 @@ from app.excel.template_generator import (
     SIGN_DATA_START_ROW,
     SIGN_DAY_COUNT,
     SIGN_DAY_START_COL,
+    SIGN_HEADER_ROW,
+    SIGN_SUMMARY_START_COL,
     SITUATION_DATA_START_ROW,
     TEMPLATE_SHEETS,
     TemplateEmployee,
@@ -58,6 +60,7 @@ from app.excel.template_generator import (
     write_overtime_pay_section_headers,
     write_overtime_sheet_title,
     write_sign_sheet_legend,
+    write_sign_sheet_headers,
     write_sign_sheet_summary_formulas,
 )
 from app.excel.field_utils import get_overtime_day_hours
@@ -66,6 +69,7 @@ from app.excel.monthly_status_display import (
     monthly_summary_status_style,
 )
 from app.models import MonthlyAttendance
+from app.services.situation_sheet import collect_situation_rows
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +139,27 @@ SINGLE_CHAR_DAY_STATUS_SYMBOLS = frozenset(
 HALF_DAY_SEPARATORS = ("/", "|", "、")
 MASTER_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2] / "templates" / "master_template.xlsx"
+)
+
+# Pattern rules for 签字 sheet symbols (checked in order; first match wins).
+SIGN_SHEET_SYMBOL_RULES: Tuple[Tuple[Tuple[str, ...], str], ...] = (
+    (("正常", "√"), "√"),
+    (("旷工",), "旷工"),
+    (("迟到",), "迟到"),
+    (("缺卡", "未打卡"), "缺卡"),
+    (("出差",), "▼"),
+    (("事假",), "◇"),
+    (("调休",), "✬"),
+    (("病假",), "※"),
+    (("年假",), "AL"),
+    (("产假", "陪产假"), "○"),
+    (("丧假",), "FL"),
+    (("婚假",), "ML"),
+    (("福利假", "生日假"), "●"),
+)
+
+SIGN_SHEET_LEGACY_SYMBOLS = frozenset(
+    {"√", "◇", "✬", "▼", "※", "●", "AL", "○", "FL", "ML", "旷工", "迟到", "缺卡"}
 )
 
 
@@ -255,6 +280,53 @@ def map_day_status_to_excel(raw: str) -> str:
     if mapped is not None:
         return mapped
     return text
+
+
+def map_sign_sheet_status(raw: str) -> str:
+    """
+    Map a daily status value to a 签字 sheet symbol (√, ◇, ▼, …).
+
+    Uses substring rules for DingTalk descriptive text (e.g. ``上班迟到9分钟`` → ``迟到``).
+    Morning and afternoon rows use the same symbol for each date.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if text in SIGN_SHEET_LEGACY_SYMBOLS:
+        return text
+    if text in ("正常", "出勤", "present"):
+        return "√"
+    if text in DAY_STATUS_DISPLAY_MAP:
+        mapped = DAY_STATUS_DISPLAY_MAP[text]
+        if mapped == "正常":
+            return "√"
+        if mapped in SIGN_SHEET_LEGACY_SYMBOLS:
+            return mapped
+        if mapped == "休息":
+            return ""
+    for keywords, symbol in SIGN_SHEET_SYMBOL_RULES:
+        if any(keyword in text for keyword in keywords):
+            return symbol
+    return ""
+
+
+def _prepare_sign_employee_rows(ws, am_row: int, pm_row: int, name: str) -> None:
+    """Unmerge template merges and set blank 签名 + duplicate 姓名 on both rows."""
+    for merged in list(ws.merged_cells.ranges):
+        if (
+            merged.min_row <= pm_row
+            and merged.max_row >= am_row
+            and merged.min_col <= 2
+            and merged.max_col >= 1
+        ):
+            ws.unmerge_cells(str(merged))
+
+    ws.cell(row=am_row, column=1, value=None)
+    ws.cell(row=pm_row, column=1, value=None)
+    ws.cell(row=am_row, column=2, value=name)
+    ws.cell(row=pm_row, column=2, value=name)
+    ws.cell(row=am_row, column=3, value="上午")
+    ws.cell(row=pm_row, column=3, value="下午")
 
 
 def format_export_day_status(
@@ -424,32 +496,30 @@ def load_workbook_from_template(
 
 
 def populate_sign_sheet(ws, records: Sequence[MonthlyAttendance], year: int, month: int) -> None:
-    """Sheet 1 签字: two rows per employee (上午 / 下午) with daily marks in D–AH."""
+    """Sheet 1 签字: two rows per employee (上午 / 下午) with identical symbols in D–AH."""
+    write_sign_sheet_headers(ws, year, month)
     write_sign_sheet_legend(ws)
     days_in_month = calendar.monthrange(year, month)[1]
     for index, record in enumerate(records):
         am_row = SIGN_DATA_START_ROW + index * 2
         pm_row = am_row + 1
-        ws.cell(row=am_row, column=2, value=record.employee.name)
-        ws.cell(row=am_row, column=3, value="上午")
-        ws.cell(row=pm_row, column=3, value="下午")
+        name = record.employee.name
+        _prepare_sign_employee_rows(ws, am_row, pm_row, name)
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
             if day > days_in_month:
+                ws.cell(row=am_row, column=col, value=None)
+                ws.cell(row=pm_row, column=col, value=None)
                 continue
             day_value = resolve_day_value(record, day)
-            text = day_value.strip()
-            if not text:
+            symbol = map_sign_sheet_status(day_value)
+            if not symbol:
+                ws.cell(row=am_row, column=col, value=None)
+                ws.cell(row=pm_row, column=col, value=None)
                 continue
-            if not _is_half_day_mark(text):
-                mapped = map_day_status_to_excel(text)
-                ws.cell(row=am_row, column=col, value=mapped)
-                ws.cell(row=pm_row, column=col, value=mapped)
-                continue
-            am_value, pm_value = split_day_halves(text)
-            ws.cell(row=am_row, column=col, value=map_day_status_to_excel(am_value))
-            ws.cell(row=pm_row, column=col, value=map_day_status_to_excel(pm_value))
+            ws.cell(row=am_row, column=col, value=symbol)
+            ws.cell(row=pm_row, column=col, value=symbol)
 
     write_sign_sheet_summary_formulas(ws, len(records), year, month)
 
@@ -479,21 +549,21 @@ def populate_monthly_sheet(
 
 
 def populate_situation_sheet(ws, records: Sequence[MonthlyAttendance], year: int, month: int) -> None:
-    """Sheet 2 情况说明: rows for employees with absenteeism, lateness, or missing punches."""
-    row = SITUATION_DATA_START_ROW
-    for record in records:
-        if not (
-            record.absenteeism_count > 0
-            or record.lateness_count > 0
-            or record.missing_punch_count > 0
-        ):
-            continue
+    """Sheet 2 情况说明: one row per employee — same data as the web UI explanation tab."""
+    situation_rows = collect_situation_rows(
+        records,
+        year,
+        month,
+        first_anomaly_date=first_anomaly_date,
+    )
 
-        ws.cell(row=row, column=1, value=record.employee.name)
-        ws.cell(row=row, column=2, value=first_anomaly_date(record, year, month) or f"{year}-{month:02d}-01")
-        ws.cell(row=row, column=3, value=record.anomaly_summary or "")
-        ws.cell(row=row, column=4, value="Y" if record.supplement_submitted else None)
-        ws.cell(row=row, column=5, value=record.notes or "")
+    row = SITUATION_DATA_START_ROW
+    for item in situation_rows:
+        ws.cell(row=row, column=1, value=item.name)
+        ws.cell(row=row, column=2, value=item.date)
+        ws.cell(row=row, column=3, value=item.anomaly)
+        ws.cell(row=row, column=4, value=item.supplement_submitted or None)
+        ws.cell(row=row, column=5, value=item.notes or None)
         row += 1
 
 
@@ -659,6 +729,13 @@ def ensure_master_template(path: Optional[Union[str, Path]] = None) -> Path:
                 title = monthly_ws.cell(row=MONTHLY_TITLE_ROW, column=1).value
                 timestamp = monthly_ws.cell(row=MONTHLY_GENERATED_ROW, column=1).value
                 header_col2 = monthly_ws.cell(row=MONTHLY_HEADER_ROW, column=2).value
+                sign_header = None
+                if TEMPLATE_SHEETS[0] in wb.sheetnames:
+                    sign_ws = wb[TEMPLATE_SHEETS[0]]
+                    sign_header = sign_ws.cell(
+                        row=SIGN_HEADER_ROW,
+                        column=SIGN_SUMMARY_START_COL,
+                    ).value
                 needs_refresh = (
                     monthly_cols < MONTHLY_DAILY_END_COL
                     or header_col2 in ("考勤组", "部门", "工号", "职位")
@@ -666,6 +743,7 @@ def ensure_master_template(path: Optional[Union[str, Path]] = None) -> Path:
                     or not (
                         isinstance(timestamp, str) and timestamp.startswith("报表生成时间：")
                     )
+                    or sign_header != "出勤合计"
                 )
             if not needs_refresh and TEMPLATE_SHEETS[3] in wb.sheetnames:
                 overtime_ws = wb[TEMPLATE_SHEETS[3]]

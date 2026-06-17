@@ -56,3 +56,9 @@ class AccessTokenResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class DingTalkOAuthStatusResponse(BaseModel):
+    enabled: bool
+    authorize_url: Optional[str] = None
+    missing_settings: list[str] = []
