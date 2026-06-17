@@ -1,4 +1,5 @@
 import client from "./auth/api";
+import type { AttendanceSheetsResponse } from "./types/attendanceSheets";
 
 export {
   downloadExcel,
@@ -108,6 +109,11 @@ export async function fetchSyncStatus() {
 
 export async function fetchAttendance(year: number, month: number) {
   const { data } = await client.get<MonthlyAttendanceResponse>(`/attendance/${year}/${month}`);
+  return data;
+}
+
+export async function fetchAttendanceSheets(year: number, month: number) {
+  const { data } = await client.get<AttendanceSheetsResponse>(`/attendance/${year}/${month}/sheets`);
   return data;
 }
 

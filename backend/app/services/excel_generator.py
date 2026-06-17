@@ -4,7 +4,7 @@ Excel workbook generation from monthly_attendance records.
 Loads ``backend/templates/master_template.xlsx`` with openpyxl and populates:
   - Sheet 1 签字: two rows per employee (上午 / 下午) with daily status
   - Sheet 2 情况说明: employees with attendance anomalies
-  - Sheet 3 月度汇总: name in column A, daily status in AJ–BN
+  - Sheet 3 月度汇总: name in column A, daily status in B–AF
   - Sheet 4 加班结算加班工资: pay section (加班费) + 调休 section (rows 90–186)
 """
 
@@ -28,9 +28,8 @@ from app.excel.template_generator import (
     MONTHLY_DAILY_START_COL,
     MONTHLY_DATA_START_ROW,
     MONTHLY_GENERATED_ROW,
+    MONTHLY_HEADER_ROW,
     MONTHLY_TITLE_ROW,
-    MONTHLY_SPACER_END_COL,
-    MONTHLY_SPACER_START_COL,
     OVERTIME_COMP_DATA_START_ROW,
     OVERTIME_COMP_DAY_START_COL,
     OVERTIME_COMP_HEADER_ROW,
@@ -38,6 +37,7 @@ from app.excel.template_generator import (
     OVERTIME_DATA_START_ROW,
     OVERTIME_DAY_COUNT,
     OVERTIME_DAY_START_COL,
+    OVERTIME_MAIN_HEADER_ROW,
     OVERTIME_SETTLEMENT_COMP,
     OVERTIME_SETTLEMENT_PAY,
     SIGN_DATA_START_ROW,
@@ -55,16 +55,21 @@ from app.excel.template_generator import (
     write_overtime_compensatory_formulas,
     write_overtime_compensatory_headers,
     write_overtime_compensatory_employee_row,
+    write_overtime_pay_section_headers,
     write_overtime_sheet_title,
     write_sign_sheet_legend,
     write_sign_sheet_summary_formulas,
 )
 from app.excel.field_utils import get_overtime_day_hours
+from app.excel.monthly_status_display import (
+    format_monthly_summary_day_status,
+    monthly_summary_status_style,
+)
 from app.models import MonthlyAttendance
 
 logger = logging.getLogger(__name__)
 
-# Recognized daily status symbols for 月度汇总 columns AJ–BN (day_1 … day_31).
+# Recognized daily status symbols for 月度汇总 columns B–AF (day_1 … day_31).
 VALID_DAY_STATUS_SYMBOLS = frozenset(
     {
         "√",
@@ -123,10 +128,10 @@ DAY_STATUS_DISPLAY_MAP = {
     "未签到": "",
 }
 
-ANOMALY_SYMBOLS = frozenset({"※", "●", "缺", "×", "迟"})
+ANOMALY_SYMBOLS = frozenset({"※", "●", "缺", "×", "迟", "旷工", "迟到", "缺卡"})
 SINGLE_CHAR_DAY_STATUS_SYMBOLS = frozenset(
     symbol for symbol in VALID_DAY_STATUS_SYMBOLS if len(symbol) == 1
-) | frozenset(ANOMALY_SYMBOLS)
+) | frozenset({"※", "●", "缺", "×", "迟"})
 HALF_DAY_SEPARATORS = ("/", "|", "、")
 MASTER_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2] / "templates" / "master_template.xlsx"
@@ -171,16 +176,36 @@ def get_day_value(record: MonthlyAttendance, day: int) -> str:
     return str(value).strip() if value else ""
 
 
+def _is_half_day_mark(value: str) -> bool:
+    """
+    Return True only when *value* encodes two distinct half-day marks.
+
+    Full-day statuses such as ``旷工`` / ``迟到`` / ``缺卡`` must not be split.
+    """
+    text = value.strip()
+    if not text:
+        return False
+    if any(separator in text for separator in HALF_DAY_SEPARATORS):
+        return True
+    if text in VALID_DAY_STATUS_SYMBOLS or text in DAY_STATUS_DISPLAY_MAP:
+        return False
+    return (
+        len(text) == 2
+        and text[0] in SINGLE_CHAR_DAY_STATUS_SYMBOLS
+        and text[1] in SINGLE_CHAR_DAY_STATUS_SYMBOLS
+    )
+
+
 def split_day_halves(value: str) -> Tuple[str, str]:
     if not value:
         return "", ""
     text = value.strip()
+    if not _is_half_day_mark(text):
+        return text, text
     for separator in HALF_DAY_SEPARATORS:
         if separator in text:
             left, right = text.split(separator, 1)
             return left.strip(), right.strip()
-    if text in VALID_DAY_STATUS_SYMBOLS or text in DAY_STATUS_DISPLAY_MAP:
-        return text, text
     if (
         len(text) == 2
         and text[0] in SINGLE_CHAR_DAY_STATUS_SYMBOLS
@@ -251,7 +276,12 @@ def format_export_day_status(
     if not day_value:
         return None
 
-    am_value, pm_value = split_day_halves(day_value)
+    text = day_value.strip()
+    if not _is_half_day_mark(text):
+        display = map_day_status_to_excel(text)
+        return display if display else None
+
+    am_value, pm_value = split_day_halves(text)
     mapped_am = map_day_status_to_excel(am_value)
     mapped_pm = map_day_status_to_excel(pm_value)
     display = combined_day_status(mapped_am, mapped_pm)
@@ -266,18 +296,32 @@ def populate_employee_daily_columns(
     month: int,
 ) -> None:
     """
-    Write ``day_1`` … ``day_31`` from *record* to columns AJ–BN on *row*.
+    Write ``day_1`` … ``day_31`` from *record* to columns B–AF on *row*.
 
-    Column index: AJ = day 1, AK = day 2, …, BN = day 31.
+    Column index: B = day 1, C = day 2, …, AF = day 31.
+    Uses DingTalk descriptive text with per-status background colors.
     """
     days_in_month = calendar.monthrange(year, month)[1]
     for day in range(1, SIGN_DAY_COUNT + 1):
         col = MONTHLY_DAILY_START_COL + day - 1
+        cell = ws.cell(row=row, column=col)
         if day > days_in_month:
-            ws.cell(row=row, column=col, value=None)
+            cell.value = None
             continue
-        display_value = format_export_day_status(record, year, month, day)
-        ws.cell(row=row, column=col, value=display_value)
+        display_value = format_monthly_summary_day_status(
+            record,
+            year,
+            month,
+            day,
+            resolve_day_value=resolve_day_value,
+        )
+        cell.value = display_value
+        if display_value:
+            fill, font = monthly_summary_status_style(display_value)
+            if fill is not None:
+                cell.fill = fill
+            if font is not None:
+                cell.font = font
 
 
 def populate_monthly_daily_status_from_db(
@@ -293,7 +337,7 @@ def populate_monthly_daily_status_from_db(
 
     Queries are performed upstream; *records* should be ``monthly_attendance`` rows
     (with ``employee`` loaded) for the target year/month. Data is written starting
-    at *start_row* (default row 5), columns AJ–BN.
+    at *start_row* (default row 5), columns B–AF.
     """
     for index, record in enumerate(records):
         row = start_row + index
@@ -387,15 +431,25 @@ def populate_sign_sheet(ws, records: Sequence[MonthlyAttendance], year: int, mon
         am_row = SIGN_DATA_START_ROW + index * 2
         pm_row = am_row + 1
         ws.cell(row=am_row, column=2, value=record.employee.name)
+        ws.cell(row=am_row, column=3, value="上午")
+        ws.cell(row=pm_row, column=3, value="下午")
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
             if day > days_in_month:
                 continue
             day_value = resolve_day_value(record, day)
-            am_value, pm_value = split_day_halves(day_value)
-            ws.cell(row=am_row, column=col, value=am_value)
-            ws.cell(row=pm_row, column=col, value=pm_value)
+            text = day_value.strip()
+            if not text:
+                continue
+            if not _is_half_day_mark(text):
+                mapped = map_day_status_to_excel(text)
+                ws.cell(row=am_row, column=col, value=mapped)
+                ws.cell(row=pm_row, column=col, value=mapped)
+                continue
+            am_value, pm_value = split_day_halves(text)
+            ws.cell(row=am_row, column=col, value=map_day_status_to_excel(am_value))
+            ws.cell(row=pm_row, column=col, value=map_day_status_to_excel(pm_value))
 
     write_sign_sheet_summary_formulas(ws, len(records), year, month)
 
@@ -408,27 +462,19 @@ def populate_monthly_sheet(
     *,
     generated_at: Optional[datetime] = None,
 ) -> None:
-    """Sheet 3 月度汇总: A–E employee info, F–AI spacers, AJ–BN daily status."""
+    """Sheet 3 月度汇总: name in column A, daily status in B–AF."""
     configure_monthly_summary_headers(ws, year, month, generated_at=generated_at)
 
     for index, record in enumerate(records):
         row = MONTHLY_DATA_START_ROW + index
         employee = record.employee
         ws.cell(row=row, column=1, value=employee.name)
-        ws.cell(row=row, column=2, value="默认考勤组")
-        ws.cell(row=row, column=3, value=employee.department or "")
-        ws.cell(row=row, column=4, value=employee.employee_code or "")
-        ws.cell(row=row, column=5, value=employee.position or "")
-
-        for col in range(MONTHLY_SPACER_START_COL, MONTHLY_SPACER_END_COL + 1):
-            ws.cell(row=row, column=col, value=None)
 
     populate_monthly_daily_status_from_db(ws, records, year, month)
 
     last_row = MONTHLY_DATA_START_ROW + len(records) - 1
     format_monthly_summary_sheet(ws, year, month, last_row=last_row)
     prepare_monthly_spacer_columns(ws, last_row=last_row)
-    # Keep employee info visible while scrolling through AJ–BN daily columns.
     ws.freeze_panes = ws.cell(row=MONTHLY_DATA_START_ROW, column=MONTHLY_DAILY_START_COL).coordinate
 
 
@@ -477,6 +523,7 @@ def populate_overtime_sheet(
     month: int,
 ) -> None:
     write_overtime_sheet_title(ws, year, month)
+    write_overtime_pay_section_headers(ws, year, month)
     for index, record in enumerate(records):
         row = OVERTIME_DATA_START_ROW + index
         employee = record.employee
@@ -611,15 +658,27 @@ def ensure_master_template(path: Optional[Union[str, Path]] = None) -> Path:
                 monthly_cols = monthly_ws.max_column or 0
                 title = monthly_ws.cell(row=MONTHLY_TITLE_ROW, column=1).value
                 timestamp = monthly_ws.cell(row=MONTHLY_GENERATED_ROW, column=1).value
-                needs_refresh = monthly_cols < MONTHLY_DAILY_END_COL or not (
-                    isinstance(title, str) and title.startswith("月度汇总")
-                ) or not (
-                    isinstance(timestamp, str) and timestamp.startswith("报表生成时间：")
+                header_col2 = monthly_ws.cell(row=MONTHLY_HEADER_ROW, column=2).value
+                needs_refresh = (
+                    monthly_cols < MONTHLY_DAILY_END_COL
+                    or header_col2 in ("考勤组", "部门", "工号", "职位")
+                    or not (isinstance(title, str) and title.startswith("月度汇总"))
+                    or not (
+                        isinstance(timestamp, str) and timestamp.startswith("报表生成时间：")
+                    )
                 )
             if not needs_refresh and TEMPLATE_SHEETS[3] in wb.sheetnames:
                 overtime_ws = wb[TEMPLATE_SHEETS[3]]
                 comp_header = overtime_ws.cell(row=OVERTIME_COMP_HEADER_ROW, column=1).value
-                needs_refresh = comp_header != "姓名"
+                pay_summary = overtime_ws.cell(row=OVERTIME_MAIN_HEADER_ROW, column=36).value
+                pay_header_fill = overtime_ws.cell(row=OVERTIME_MAIN_HEADER_ROW, column=36).fill.fgColor.rgb
+                needs_refresh = (
+                    comp_header != "姓名"
+                    or not (
+                        isinstance(pay_summary, str) and "加班时长合计" in pay_summary
+                    )
+                    or pay_header_fill == "0090EE90"
+                )
         finally:
             wb.close()
     if needs_refresh:

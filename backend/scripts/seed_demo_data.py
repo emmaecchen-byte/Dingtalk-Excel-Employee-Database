@@ -300,27 +300,29 @@ def _build_day_values(
     weekdays = [day for day in range(1, days_in_month + 1) if not _is_weekend(year, month, day)]
     for day in range(1, days_in_month + 1):
         if _is_weekend(year, month, day):
-            values[f"day_{day}"] = None
+            values[f"day_{day}"] = "休息"
         else:
-            values[f"day_{day}"] = "√"
+            values[f"day_{day}"] = "正常"
 
     cursor = 0
+    late_minutes = [3, 9, 12, 18, 25]
 
     def take_day(status: str) -> None:
         nonlocal cursor
         while cursor < len(weekdays):
             day = weekdays[cursor]
             cursor += 1
-            if values[f"day_{day}"] == "√":
+            if values[f"day_{day}"] == "正常":
                 values[f"day_{day}"] = status
                 return
 
     for _ in range(absenteeism_count):
         take_day("旷工")
-    for _ in range(lateness_count):
-        take_day("迟到")
+    for index in range(lateness_count):
+        minutes = late_minutes[index % len(late_minutes)]
+        take_day(f"上班迟到{minutes}分钟")
     for _ in range(missing_punch_count):
-        take_day("缺卡")
+        take_day("上班缺卡")
 
     return values
 

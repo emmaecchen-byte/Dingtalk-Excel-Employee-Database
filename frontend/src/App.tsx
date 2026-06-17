@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Dashboard from "./pages/Dashboard";
+import AttendanceSheetsPage from "./pages/AttendanceSheetsPage";
 import DingTalkCallbackPage from "./pages/DingTalkCallbackPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
@@ -25,6 +26,14 @@ export default function App() {
             element={
               <ErrorBoundary title="Dashboard error">
                 <Dashboard />
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/sheets"
+            element={
+              <ErrorBoundary title="Attendance sheets error">
+                <AttendanceSheetsPage />
               </ErrorBoundary>
             }
           />

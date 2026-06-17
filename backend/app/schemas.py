@@ -61,6 +61,40 @@ class MonthlyAttendanceResponse(BaseModel):
     last_sync: Optional[datetime]
 
 
+class EmployeeSheetRow(BaseModel):
+    id: int
+    name: str
+    department: str
+    position: Optional[str] = None
+    employee_code: Optional[str] = None
+    days: List[str] = Field(default_factory=list)
+    morning: List[str] = Field(default_factory=list)
+    afternoon: List[str] = Field(default_factory=list)
+    overtime_days: List[float] = Field(default_factory=list)
+    sign_counts: dict = Field(default_factory=dict)
+    absent_days: int = 0
+    work_days: int = 0
+    total_attendance_days: int = 0
+    absenteeism_count: int = 0
+    lateness_count: int = 0
+    missing_punch_count: int = 0
+    anomaly_summary: Optional[str] = None
+    supplement_submitted: bool = False
+    notes: Optional[str] = None
+    first_anomaly_date: Optional[str] = None
+
+
+class AttendanceSheetsResponse(BaseModel):
+    company_name: str
+    year: int
+    month: int
+    generated_at: datetime
+    last_sync: Optional[datetime] = None
+    work_days: int
+    stats: MonthlyStats
+    employees: List[EmployeeSheetRow]
+
+
 class PendingUpdateListItem(BaseModel):
     employee_name: str
     field_name: str

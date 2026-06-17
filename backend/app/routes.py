@@ -16,11 +16,13 @@ from app.services.sync_counts import count_pending_conflicts, count_pending_upda
 from app.schemas import (
     AttendancePatchRequest,
     AttendancePatchResponse,
+    AttendanceSheetsResponse,
     AttendanceSummaryResponse,
     EmployeeSummary,
     MonthlyAttendanceResponse,
     MonthlyStats,
 )
+from app.services.attendance_sheets import build_attendance_sheets
 from app.services.attendance_update import AttendanceUpdateError, patch_employee_attendance
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,21 @@ def get_attendance_summary(
         stats=_build_monthly_stats(db, current_user.company_id, employees),
         last_sync=_last_sync_from_records(records),
     )
+
+
+@router.get("/attendance/{year}/{month}/sheets", response_model=AttendanceSheetsResponse)
+def get_attendance_sheets(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(READ_ROLES)),
+):
+    try:
+        payload = build_attendance_sheets(db, current_user.company_id, year, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return AttendanceSheetsResponse(**payload)
 
 
 @router.get("/attendance/{year}/{month}", response_model=MonthlyAttendanceResponse)

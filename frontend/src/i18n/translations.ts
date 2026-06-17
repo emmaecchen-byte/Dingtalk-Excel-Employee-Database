@@ -4,6 +4,11 @@ export const translations = {
   zh: {
     appTitle: "钉钉考勤管理系统",
     demoTag: "v1.0 Demo",
+    attendanceSheets: "考勤表预览",
+    attendanceSheetsTitle: "考勤表预览",
+    attendanceSheetsLoadFailed: "加载考勤表失败",
+    backToDashboard: "返回仪表盘",
+    refresh: "刷新",
     syncDingTalk: "同步钉钉",
     downloadExcel: "下载 Excel",
     exportPdf: "导出 PDF",
@@ -175,6 +180,11 @@ export const translations = {
   en: {
     appTitle: "DingTalk Attendance Management",
     demoTag: "v1.0 Demo",
+    attendanceSheets: "Sheet preview",
+    attendanceSheetsTitle: "Attendance sheets",
+    attendanceSheetsLoadFailed: "Failed to load attendance sheets",
+    backToDashboard: "Back to dashboard",
+    refresh: "Refresh",
     syncDingTalk: "Sync DingTalk",
     downloadExcel: "Download Excel",
     exportPdf: "Export PDF",

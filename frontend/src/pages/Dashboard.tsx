@@ -20,6 +20,7 @@ import {
   GlobalOutlined,
   HistoryOutlined,
   LogoutOutlined,
+  TableOutlined,
   UploadOutlined,
   UserAddOutlined,
   UserOutlined,
@@ -179,6 +180,11 @@ function DashboardContent() {
           <Space wrap>
             <Select value={year} onChange={setYear} options={yearOptions} />
             <Select value={month} onChange={setMonth} options={monthOptions} />
+            {canSync && (
+              <Link to={`/sheets?year=${year}&month=${month}`}>
+                <Button icon={<TableOutlined />}>{t("attendanceSheets")}</Button>
+              </Link>
+            )}
             {canSync && (
               <Button type="primary" icon={<CloudSyncOutlined />} loading={syncing} onClick={() => void handleSync()}>
                 {t("syncDingTalk")}

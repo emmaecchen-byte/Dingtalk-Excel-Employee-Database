@@ -1,7 +1,7 @@
 """
 Parse uploaded attendance Excel workbooks (openpyxl).
 
-Reads Sheet 3 ``月度汇总`` for employee names, daily status (AJ–BN), and metadata.
+Reads Sheet 3 ``月度汇总`` for employee names, daily status (B–AF), and metadata.
 """
 
 from __future__ import annotations
