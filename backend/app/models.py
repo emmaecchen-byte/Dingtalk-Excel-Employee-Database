@@ -259,3 +259,146 @@ class VersionHistory(Base):
     changes_summary: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
     snapshot_id: Mapped[Optional[int]] = mapped_column(ForeignKey("excel_snapshots.id", ondelete="SET NULL"))
     version_note: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class AttendancePeriod(Base):
+    __tablename__ = "attendance_periods"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    data_source: Mapped[str] = mapped_column(String(20), nullable=False, default="upload")
+    source_filename: Mapped[Optional[str]] = mapped_column(String(255))
+    uploaded_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    confirmed_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    archived_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    validation_summary: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    employee_rows: Mapped[List["EmployeeAttendance"]] = relationship(back_populates="period")
+    edit_logs: Mapped[List["AttendancePeriodEditLog"]] = relationship(back_populates="period")
+
+
+class EmployeeAttendance(Base):
+    __tablename__ = "employee_attendance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_id: Mapped[int] = mapped_column(ForeignKey("attendance_periods.id", ondelete="CASCADE"), nullable=False)
+    employee_id: Mapped[Optional[int]] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
+    employee_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    row_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    requires_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    period: Mapped["AttendancePeriod"] = relationship(back_populates="employee_rows")
+    employee: Mapped[Optional["Employee"]] = relationship()
+    daily_records: Mapped[List["DailyAttendance"]] = relationship(back_populates="employee_attendance")
+
+
+class DailyAttendance(Base):
+    __tablename__ = "daily_attendance"
+    __table_args__ = (
+        UniqueConstraint("employee_attendance_id", "day", name="daily_attendance_unique"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_attendance_id: Mapped[int] = mapped_column(
+        ForeignKey("employee_attendance.id", ondelete="CASCADE"), nullable=False
+    )
+    day: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_text: Mapped[Optional[str]] = mapped_column(Text)
+    morning_status: Mapped[Optional[str]] = mapped_column(String(100))
+    afternoon_status: Mapped[Optional[str]] = mapped_column(String(100))
+    requires_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    employee_attendance: Mapped["EmployeeAttendance"] = relationship(back_populates="daily_records")
+
+
+class AbnormalRecord(Base):
+    __tablename__ = "abnormal_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    period_id: Mapped[int] = mapped_column(ForeignKey("attendance_periods.id", ondelete="CASCADE"), nullable=False)
+    employee_attendance_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("employee_attendance.id", ondelete="SET NULL")
+    )
+    employee_id: Mapped[Optional[int]] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
+    employee_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    exception_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dates: Mapped[list] = mapped_column(JsonType, nullable=False, default=list)
+    supplement_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    edit_logs: Mapped[List["AbnormalRecordEditLog"]] = relationship(back_populates="abnormal_record")
+
+
+class AbnormalRecordEditLog(Base):
+    __tablename__ = "abnormal_record_edit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    abnormal_record_id: Mapped[int] = mapped_column(
+        ForeignKey("abnormal_records.id", ondelete="CASCADE"), nullable=False
+    )
+    edited_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    editor_name: Mapped[Optional[str]] = mapped_column(String(100))
+    field_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    old_value: Mapped[Optional[str]] = mapped_column(Text)
+    new_value: Mapped[Optional[str]] = mapped_column(Text)
+    edited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    abnormal_record: Mapped["AbnormalRecord"] = relationship(back_populates="edit_logs")
+
+
+class AttendancePeriodEditLog(Base):
+    __tablename__ = "attendance_period_edit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_id: Mapped[int] = mapped_column(
+        ForeignKey("attendance_periods.id", ondelete="CASCADE"), nullable=False
+    )
+    daily_attendance_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("daily_attendance.id", ondelete="SET NULL")
+    )
+    employee_name: Mapped[Optional[str]] = mapped_column(String(100))
+    edited_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    editor_name: Mapped[Optional[str]] = mapped_column(String(100))
+    field_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    old_value: Mapped[Optional[str]] = mapped_column(Text)
+    new_value: Mapped[Optional[str]] = mapped_column(Text)
+    edited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    period: Mapped["AttendancePeriod"] = relationship(back_populates="edit_logs")
+
+
+class AttendanceRule(Base):
+    __tablename__ = "attendance_rules"
+    __table_args__ = (UniqueConstraint("company_id", "raw_keyword", name="attendance_rules_company_keyword_unique"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    raw_keyword: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_status: Mapped[str] = mapped_column(String(100), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    counts_as_attendance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    counts_as_meal_allowance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    leave_type: Mapped[Optional[str]] = mapped_column(String(50))
+    is_abnormal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )

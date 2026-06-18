@@ -56,5 +56,24 @@ def ensure_auth_schema() -> None:
                 column = f"overtime_day_{day}"
                 if column not in attendance_columns:
                     conn.execute(
-                        text(f"ALTER TABLE monthly_attendance ADD COLUMN {column} NUMERIC(5, 1)")
+                        text(
+                            f"ALTER TABLE monthly_attendance ADD COLUMN {column} NUMERIC(5, 1)"
+                        )
                     )
+            period_columns = _sqlite_column_names(engine, "attendance_periods")
+            if period_columns:
+                if "data_source" not in period_columns:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE attendance_periods "
+                            "ADD COLUMN data_source VARCHAR(20) NOT NULL DEFAULT 'upload'"
+                        )
+                    )
+                if "confirmed_by" not in period_columns:
+                    conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN confirmed_by INTEGER"))
+                if "confirmed_at" not in period_columns:
+                    conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN confirmed_at DATETIME"))
+                if "archived_by" not in period_columns:
+                    conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN archived_by INTEGER"))
+                if "archived_at" not in period_columns:
+                    conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN archived_at DATETIME"))

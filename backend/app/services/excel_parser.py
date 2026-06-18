@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import calendar
 import logging
+import re
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -67,14 +68,10 @@ def _cell_value(value) -> str:
 def _parse_title_period(title: object) -> Tuple[Optional[int], Optional[int]]:
     if not title:
         return None, None
-    text = str(title)
-    if "年" in text and "月" in text:
-        try:
-            parsed_year = int(text.split("年", 1)[0].split()[-1])
-            parsed_month = int(text.split("年", 1)[1].split("月", 1)[0])
-            return parsed_year, parsed_month
-        except (TypeError, ValueError, IndexError):
-            pass
+    text = str(title).strip()
+    match = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
     if "统计日期" in text and "至" in text:
         try:
             start = text.split("至", 1)[0]

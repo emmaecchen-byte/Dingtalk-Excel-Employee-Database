@@ -20,11 +20,13 @@ import {
   GlobalOutlined,
   HistoryOutlined,
   LogoutOutlined,
+  ProfileOutlined,
   TableOutlined,
   UploadOutlined,
   UserAddOutlined,
   UserOutlined,
   ApiOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../auth/AuthContext";
 import CloneMonthModal from "../components/CloneMonthModal";
@@ -157,6 +159,13 @@ function DashboardContent() {
             </Link>
           )}
           {isHrAdmin && (
+            <Link to="/rule-config">
+              <Button type="text" icon={<SettingOutlined />} style={{ color: "#fff" }}>
+                规则配置
+              </Button>
+            </Link>
+          )}
+          {isHrAdmin && (
             <Link to="/webhooks">
               <Button type="text" icon={<ApiOutlined />} style={{ color: "#fff" }}>
                 Webhooks
@@ -191,6 +200,16 @@ function DashboardContent() {
             {canSync && (
               <Link to={`/sheets?year=${year}&month=${month}`}>
                 <Button icon={<TableOutlined />}>{t("attendanceSheets")}</Button>
+              </Link>
+            )}
+            {canSync && (
+              <Link to="/attendance-list">
+                <Button icon={<HistoryOutlined />}>考勤记录</Button>
+              </Link>
+            )}
+            {canSync && (
+              <Link to="/excel-workflow">
+                <Button icon={<ProfileOutlined />}>Excel流程</Button>
               </Link>
             )}
             {canSync && (

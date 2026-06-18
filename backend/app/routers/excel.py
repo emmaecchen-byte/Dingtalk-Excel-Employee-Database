@@ -17,6 +17,7 @@ from app.schemas import ExcelFieldChange, ExcelUploadConflictPreview, ExcelUploa
 from app.services.excel_download import prepare_excel_download
 from app.services.excel_generator import ExcelGeneratorError
 from app.services.excel_upload import ExcelUploadError, handle_excel_upload
+from app.services.excel_workflow import ExcelWorkflowError, generate_full_excel_from_dingtalk_upload
 from app.services.snapshot_service import SnapshotServiceError
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def download_excel(
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
     """
-    Download a populated attendance workbook for the given month.
+    Download initial monthly summary workbook (月度汇总 only) for the given month.
 
     - Requires ``hr_admin`` or ``hr_viewer`` role
     - Creates a versioned ``excel_snapshots`` row before streaming the file
@@ -102,6 +103,63 @@ def download_excel(
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "X-Snapshot-Id": str(snapshot_id),
             "X-Snapshot-Version": str(snapshot_version),
+        },
+    )
+
+
+@router.post("/upload-dingtalk-source")
+async def upload_dingtalk_source_and_build_full_excel(
+    background_tasks: BackgroundTasks,
+    year: int = Form(...),
+    month: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(HR_ROLES)),
+):
+    """
+    Upload original DingTalk 月度汇总 and generate the full 4-sheet workbook.
+    """
+    if year < 2000 or year > 2100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Year must be between 2000 and 2100",
+        )
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Month must be between 1 and 12",
+        )
+
+    try:
+        result = await generate_full_excel_from_dingtalk_upload(
+            db=db,
+            user=current_user,
+            year=year,
+            month=month,
+            upload=file,
+        )
+    except ExcelWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        logger.exception(
+            "DingTalk source upload build failed: user_id=%s company_id=%s period=%s-%02d",
+            current_user.id,
+            current_user.company_id,
+            year,
+            month,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate full workbook from DingTalk source",
+        ) from exc
+
+    background_tasks.add_task(result.cleanup)
+    return StreamingResponse(
+        result.as_stream(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.filename}"',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         },
     )
 

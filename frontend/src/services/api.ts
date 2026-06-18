@@ -65,7 +65,7 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-async function parseBlobError(blob: Blob): Promise<string | null> {
+export async function parseBlobError(blob: Blob): Promise<string | null> {
   try {
     const text = await blob.text();
     const json = JSON.parse(text) as { detail?: string };
@@ -75,7 +75,7 @@ async function parseBlobError(blob: Blob): Promise<string | null> {
   }
 }
 
-function triggerBrowserDownload(blob: Blob, filename: string) {
+export function triggerBrowserDownload(blob: Blob, filename: string) {
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -144,6 +144,108 @@ export async function uploadExcel(
         return;
       }
       onProgress?.(Math.round((event.loaded * 100) / event.total));
+    },
+  });
+  return data;
+}
+
+/**
+ * POST /api/excel/upload-dingtalk-source — upload original DingTalk 月度汇总
+ * and download generated 4-sheet workbook.
+ */
+export async function uploadDingTalkSourceAndDownloadFullExcel(
+  year: number,
+  month: number,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Only .xlsx files are supported");
+  }
+
+  const formData = new FormData();
+  formData.append("year", String(year));
+  formData.append("month", String(month));
+  formData.append("file", file);
+
+  const response = await client.post("/excel/upload-dingtalk-source", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    responseType: "blob",
+    onUploadProgress: (event) => {
+      if (!event.total) {
+        return;
+      }
+      onProgress?.(Math.round((event.loaded * 100) / event.total));
+    },
+  });
+
+  const contentType = String(response.headers["content-type"] ?? "");
+  if (contentType.includes("application/json")) {
+    const detail = await parseBlobError(response.data as Blob);
+    throw new Error(detail ?? "Failed to generate full Excel file");
+  }
+
+  const filename = filenameFromContentDisposition(
+    response.headers["content-disposition"],
+    `attendance_full_${year}_${String(month).padStart(2, "0")}.xlsx`
+  );
+  const blob = new Blob([response.data], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  triggerBrowserDownload(blob, filename);
+  return filename;
+}
+
+export interface ValidationIssue {
+  severity: string;
+  code: string;
+  message: string;
+  employee_name?: string | null;
+  day?: number | null;
+  row_index?: number | null;
+}
+
+export interface AttendanceUploadResponse {
+  success: boolean;
+  period_id: number;
+  year: number;
+  month: number;
+  status: string;
+  employee_count: number;
+  daily_record_count: number;
+  requires_review_count: number;
+  persisted: boolean;
+  has_blocking_errors: boolean;
+  validation_issues: ValidationIssue[];
+}
+
+/**
+ * POST /api/attendance/upload — parse DingTalk monthly summary and store structured data.
+ */
+export async function uploadAttendanceExcel(
+  file: File,
+  options?: { year?: number; month?: number; onProgress?: (percent: number) => void }
+): Promise<AttendanceUploadResponse> {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Only .xlsx files are supported");
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  if (options?.year) {
+    formData.append("year", String(options.year));
+  }
+  if (options?.month) {
+    formData.append("month", String(options.month));
+  }
+
+  const { data } = await client.post<AttendanceUploadResponse>("/attendance/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: (event) => {
+      if (!event.total) {
+        return;
+      }
+      options?.onProgress?.(Math.round((event.loaded * 100) / event.total));
     },
   });
   return data;

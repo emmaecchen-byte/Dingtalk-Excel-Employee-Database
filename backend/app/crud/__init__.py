@@ -2,8 +2,26 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.crud.attendance_period import (
+    attendance_period,
+    daily_attendance,
+    employee_attendance,
+    match_employee_by_name,
+)
 from app.crud.base import CRUDBase
-from app.models import Company, Conflict, Employee, ExcelSnapshot, ManualChange, MonthlyAttendance, User, VersionHistory
+from app.models import (
+    AttendancePeriod,
+    Company,
+    Conflict,
+    DailyAttendance,
+    Employee,
+    EmployeeAttendance,
+    ExcelSnapshot,
+    ManualChange,
+    MonthlyAttendance,
+    User,
+    VersionHistory,
+)
 
 
 class CRUDCompany(CRUDBase[Company]):
@@ -168,3 +186,18 @@ manual_change = CRUDManualChange(ManualChange)
 conflict = CRUDConflict(Conflict)
 version_history = CRUDVersionHistory(VersionHistory)
 user = CRUDUser(User)
+
+__all__ = [
+    "company",
+    "employee",
+    "monthly_attendance",
+    "excel_snapshot",
+    "manual_change",
+    "conflict",
+    "version_history",
+    "user",
+    "attendance_period",
+    "employee_attendance",
+    "daily_attendance",
+    "match_employee_by_name",
+]

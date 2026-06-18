@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.services.excel_generator import (
     ExcelExportResult,
     ExcelGeneratorError,
-    generate_attendance_excel,
+    generate_monthly_summary_excel,
 )
 from app.models import ExcelSnapshot, User
 from app.services.snapshot_service import SnapshotServiceError, create_snapshot
@@ -86,7 +86,7 @@ def prepare_excel_download(
             commit=False,
         )
 
-        export_result = generate_attendance_excel(db, user.company_id, year, month)
+        export_result = generate_monthly_summary_excel(db, user.company_id, year, month)
         file_size = export_result.path.stat().st_size
 
         snapshot = db.query(ExcelSnapshot).filter(ExcelSnapshot.id == snapshot_id).first()

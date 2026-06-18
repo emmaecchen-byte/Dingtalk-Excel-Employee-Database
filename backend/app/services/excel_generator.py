@@ -20,7 +20,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session, joinedload
 
 from app.excel.template_generator import (
@@ -282,32 +282,16 @@ def map_day_status_to_excel(raw: str) -> str:
     return text
 
 
-def map_sign_sheet_status(raw: str) -> str:
+def map_sign_sheet_status(raw: str, rules=None) -> str:
     """
     Map a daily status value to a 签字 sheet symbol (√, ◇, ▼, …).
 
-    Uses substring rules for DingTalk descriptive text (e.g. ``上班迟到9分钟`` → ``迟到``).
-    Morning and afternoon rows use the same symbol for each date.
+    Uses configurable rules when provided; otherwise falls back to built-in defaults.
     """
-    text = (raw or "").strip()
-    if not text:
-        return ""
-    if text in SIGN_SHEET_LEGACY_SYMBOLS:
-        return text
-    if text in ("正常", "出勤", "present"):
-        return "√"
-    if text in DAY_STATUS_DISPLAY_MAP:
-        mapped = DAY_STATUS_DISPLAY_MAP[text]
-        if mapped == "正常":
-            return "√"
-        if mapped in SIGN_SHEET_LEGACY_SYMBOLS:
-            return mapped
-        if mapped == "休息":
-            return ""
-    for keywords, symbol in SIGN_SHEET_SYMBOL_RULES:
-        if any(keyword in text for keyword in keywords):
-            return symbol
-    return ""
+    from app.services.attendance_rule_engine import default_rules, map_status_to_symbol
+
+    resolved = rules if rules is not None else default_rules()
+    return map_status_to_symbol(raw, resolved)
 
 
 def _prepare_sign_employee_rows(ws, am_row: int, pm_row: int, name: str) -> None:
@@ -698,6 +682,59 @@ def generate_attendance_excel(
 
     logger.info(
         "Generated attendance Excel for company_id=%s %s-%02d (%s employees) -> %s",
+        company_id,
+        year,
+        month,
+        len(records),
+        output_path,
+    )
+
+    return ExcelExportResult(
+        path=output_path,
+        filename=filename,
+        year=year,
+        month=month,
+        employee_count=len(records),
+    )
+
+
+def generate_monthly_summary_excel(
+    db: Session,
+    company_id: int,
+    year: int,
+    month: int,
+    *,
+    output_dir: Optional[Union[str, Path]] = None,
+) -> ExcelExportResult:
+    """
+    Generate a single-sheet workbook that contains only 月度汇总.
+    """
+    if month < 1 or month > 12:
+        raise ExcelGeneratorError("Month must be between 1 and 12", status_code=400)
+
+    records = query_attendance_records(db, company_id, year, month)
+    if not records:
+        raise ExcelGeneratorError(f"No attendance data for {year}-{month:02d}", status_code=404)
+
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = TEMPLATE_SHEETS[2]
+    populate_monthly_sheet(ws, records, year, month, generated_at=datetime.utcnow())
+
+    filename = f"monthly_summary_{year}_{month:02d}.xlsx"
+    if output_dir:
+        target_dir = Path(output_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = target_dir / filename
+        workbook.save(output_path)
+    else:
+        fd, temp_name = tempfile.mkstemp(prefix="monthly_summary_", suffix=".xlsx")
+        os.close(fd)
+        output_path = Path(temp_name)
+        workbook.save(output_path)
+
+    logger.info(
+        "Generated monthly summary Excel for company_id=%s %s-%02d (%s employees) -> %s",
         company_id,
         year,
         month,

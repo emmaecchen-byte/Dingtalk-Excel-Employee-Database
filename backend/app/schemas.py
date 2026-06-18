@@ -474,3 +474,256 @@ class WebhookTestResponse(BaseModel):
     pending_status: str
     duplicate: bool = False
     message: str
+
+
+class ValidationIssueResponse(BaseModel):
+    severity: str
+    code: str
+    message: str
+    employee_name: Optional[str] = None
+    day: Optional[int] = None
+    row_index: Optional[int] = None
+
+
+class AttendanceUploadResponse(BaseModel):
+    success: bool
+    period_id: int
+    year: int
+    month: int
+    status: str
+    employee_count: int
+    daily_record_count: int
+    requires_review_count: int
+    persisted: bool
+    has_blocking_errors: bool
+    validation_issues: List[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class AttendanceStatusOption(BaseModel):
+    value: str
+    symbol: str
+
+
+class AttendanceDayCell(BaseModel):
+    daily_id: Optional[int] = None
+    day: Optional[int] = None
+    raw_text: str = ""
+    status: str = ""
+    symbol: str = ""
+    requires_review: bool = False
+
+
+class AttendanceRowTotals(BaseModel):
+    present: int = 0
+    personal_leave: int = 0
+    compensatory_leave: int = 0
+    business_trip: int = 0
+    sick_leave: int = 0
+    welfare_leave: int = 0
+    annual_leave: int = 0
+    maternity_leave: int = 0
+    funeral_leave: int = 0
+    marriage_leave: int = 0
+    absenteeism: int = 0
+    lateness: int = 0
+    missing_punch: int = 0
+    work_days: int = 0
+    absent_days: int = 0
+
+
+class AttendanceShiftRow(BaseModel):
+    shift: str
+    shift_label: str
+    days: List[AttendanceDayCell] = Field(default_factory=list)
+    totals: AttendanceRowTotals
+
+
+class AttendanceTableEmployee(BaseModel):
+    employee_attendance_id: int
+    employee_id: Optional[int] = None
+    employee_name: str
+    department: str = ""
+    requires_review: bool = False
+    rows: List[AttendanceShiftRow] = Field(default_factory=list)
+    totals: AttendanceRowTotals
+
+
+class AttendancePeriodTableResponse(BaseModel):
+    period_id: int
+    year: int
+    month: int
+    days_in_month: int
+    status: str
+    is_editable: bool = True
+    is_read_only: bool = False
+    total_employees: int
+    page: int
+    page_size: int
+    status_options: List[AttendanceStatusOption] = Field(default_factory=list)
+    employees: List[AttendanceTableEmployee] = Field(default_factory=list)
+
+
+class DailyAttendancePatchRequest(BaseModel):
+    shift: Literal["morning", "afternoon"]
+    status: str
+
+
+class DailyAttendancePatchResponse(BaseModel):
+    daily_id: int
+    day: int
+    shift: str
+    status: str
+    symbol: str
+    raw_text: str
+    requires_review: bool
+    employee_attendance_id: int
+    employee_requires_review: bool
+    row_totals: AttendanceRowTotals
+    employee_totals: AttendanceRowTotals
+
+
+class AbnormalRecordDateEntry(BaseModel):
+    day: int
+    date: str
+    morning: str = ""
+    afternoon: str = ""
+    raw_text: str = ""
+    detail: str = ""
+    shift: Optional[str] = None
+    daily_id: Optional[int] = None
+
+
+class AbnormalRecordEditLogResponse(BaseModel):
+    id: int
+    field_name: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    editor_name: Optional[str] = None
+    edited_at: datetime
+
+
+class AbnormalRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    period_id: int
+    employee_attendance_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    employee_name: str
+    exception_type: str
+    summary: str
+    dates: List[AbnormalRecordDateEntry] = Field(default_factory=list)
+    supplement_status: str
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    edit_logs: List[AbnormalRecordEditLogResponse] = Field(default_factory=list)
+
+
+class AbnormalRecordListResponse(BaseModel):
+    period_id: int
+    total: int
+    records: List[AbnormalRecordResponse] = Field(default_factory=list)
+
+
+class AbnormalRecordUpdateRequest(BaseModel):
+    supplement_status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AbnormalRecordCreateRequest(BaseModel):
+    employee_name: str
+    exception_type: str
+    summary: str
+    dates: List[AbnormalRecordDateEntry] = Field(default_factory=list)
+    employee_attendance_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    supplement_status: str = "pending"
+    notes: Optional[str] = None
+
+
+class ExceptionDetectionResponse(BaseModel):
+    period_id: int
+    year: int
+    month: int
+    records_created: int
+
+
+class AttendanceRuleResponse(BaseModel):
+    id: int
+    company_id: int
+    raw_keyword: str
+    normalized_status: str
+    symbol: str
+    counts_as_attendance: bool
+    counts_as_meal_allowance: bool
+    leave_type: Optional[str] = None
+    is_abnormal: bool
+    priority: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AttendanceRuleListResponse(BaseModel):
+    total: int
+    rules: List[AttendanceRuleResponse] = Field(default_factory=list)
+
+
+class AttendanceRuleCreateRequest(BaseModel):
+    raw_keyword: str
+    normalized_status: str
+    symbol: str = ""
+    counts_as_attendance: bool = False
+    counts_as_meal_allowance: bool = False
+    leave_type: Optional[str] = None
+    is_abnormal: bool = False
+    priority: int = 0
+
+
+class AttendanceRuleUpdateRequest(BaseModel):
+    raw_keyword: Optional[str] = None
+    normalized_status: Optional[str] = None
+    symbol: Optional[str] = None
+    counts_as_attendance: Optional[bool] = None
+    counts_as_meal_allowance: Optional[bool] = None
+    leave_type: Optional[str] = None
+    is_abnormal: Optional[bool] = None
+    priority: Optional[int] = None
+
+
+class AttendancePeriodSummary(BaseModel):
+    id: int
+    year: int
+    month: int
+    data_source: str
+    employee_count: int
+    exception_count: int
+    status: str
+    display_status: str
+    is_editable: bool
+    is_read_only: bool
+    created_at: datetime
+    updated_at: datetime
+    confirmed_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    source_filename: Optional[str] = None
+
+
+class AttendancePeriodListResponse(BaseModel):
+    total: int
+    periods: List[AttendancePeriodSummary] = Field(default_factory=list)
+
+
+class AttendancePeriodActionResponse(BaseModel):
+    success: bool = True
+    period: AttendancePeriodSummary
+
+
+class AttendancePeriodEditLogResponse(BaseModel):
+    id: int
+    field_name: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    employee_name: Optional[str] = None
+    editor_name: Optional[str] = None
+    edited_at: datetime
