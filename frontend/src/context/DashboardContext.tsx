@@ -20,6 +20,7 @@ import {
   downloadExcel,
   getApiErrorMessage,
   syncAll,
+  uploadAndConvertAttendance,
   uploadExcel,
   type ExcelUploadResponse,
 } from "../services/api";
@@ -71,11 +72,15 @@ interface DashboardContextValue {
   handleDownloadExcel: () => Promise<void>;
   handleUploadExcel: (file: File) => Promise<void>;
   triggerUpload: () => void;
+  converting: boolean;
+  convertProgress: number;
+  handleConvertUpload: (file: File) => Promise<void>;
   handleDataChange: (nextData: MonthlyAttendanceResponse) => void;
   syncRefreshToken: number;
   bumpSyncRefresh: () => void;
   conflictModalOpen: boolean;
   setConflictModalOpen: (open: boolean) => void;
+  canActOnSelectedPeriod: boolean;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -84,6 +89,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [convertProgress, setConvertProgress] = useState(0);
 
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
@@ -113,6 +119,10 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const syncStatusQuery = useSyncStatusQuery(true);
 
   useEffect(() => {
+    setLocalData(null);
+  }, [selectedYear, selectedMonth]);
+
+  useEffect(() => {
     if (attendanceQuery.data) {
       setLocalData(attendanceQuery.data);
     }
@@ -131,6 +141,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const data = localData;
   const employeeData = data?.employees ?? [];
+  const canActOnSelectedPeriod = Boolean(
+    data && data.year === selectedYear && data.month === selectedMonth
+  );
 
   const stats = useMemo(() => {
     if (!employeeData.length && !data) {
@@ -204,6 +217,27 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     },
   });
 
+  const convertMutation = useMutation({
+    mutationFn: (file: File) =>
+      uploadAndConvertAttendance(file, {
+        year: selectedYear,
+        month: selectedMonth,
+        onProgress: (percent) => setConvertProgress(percent),
+      }),
+    onSuccess: (filename) => {
+      message.success(t("uploadConvertExcelSuccess", { filename }));
+    },
+    onError: (error) => {
+      const fallback = error instanceof Error && error.message.includes(".xlsx")
+        ? t("uploadXlsxOnly")
+        : t("uploadConvertExcelFailed");
+      message.error(getApiErrorMessage(error, fallback));
+    },
+    onSettled: () => {
+      setConvertProgress(0);
+    },
+  });
+
   const uploadMutation = useMutation({
     mutationFn: (file: File) =>
       uploadExcel(selectedYear, selectedMonth, file, (percent) => setUploadProgress(percent)),
@@ -261,13 +295,25 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     uploadInputRef.current?.click();
   }, []);
 
+  const handleConvertUpload = useCallback(
+    async (file: File) => {
+      if (!file.name.toLowerCase().endsWith(".xlsx")) {
+        message.error(t("uploadXlsxOnly"));
+        return;
+      }
+      await convertMutation.mutateAsync(file);
+    },
+    [convertMutation, t]
+  );
+
   const isLoading =
     attendanceQuery.isLoading ||
     attendanceQuery.isFetching ||
     syncMutation.isPending ||
     downloadMutation.isPending ||
     exportPdfMutation.isPending ||
-    uploadMutation.isPending;
+    uploadMutation.isPending ||
+    convertMutation.isPending;
 
   const value = useMemo<DashboardContextValue>(
     () => ({
@@ -288,6 +334,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       syncStatusMessage,
       uploading: uploadMutation.isPending,
       uploadProgress,
+      converting: convertMutation.isPending,
+      convertProgress,
+      handleConvertUpload,
       downloading: downloadMutation.isPending,
       exportingPdf: exportPdfMutation.isPending,
       search,
@@ -313,12 +362,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       bumpSyncRefresh,
       conflictModalOpen,
       setConflictModalOpen,
+      canActOnSelectedPeriod,
     }),
     [
       selectedYear,
       selectedMonth,
       employeeData,
       data,
+      canActOnSelectedPeriod,
       stats,
       isLoading,
       attendanceQuery.isLoading,
@@ -327,6 +378,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       syncStatusMessage,
       uploadMutation.isPending,
       uploadProgress,
+      convertMutation.isPending,
+      convertProgress,
+      handleConvertUpload,
       downloadMutation.isPending,
       exportPdfMutation.isPending,
       handleExportPdf,
@@ -342,6 +396,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       handleDownloadExcel,
       handleUploadExcel,
       triggerUpload,
+      handleConvertUpload,
       handleDataChange,
       syncRefreshToken,
       bumpSyncRefresh,
@@ -363,7 +418,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           }
         }}
       />
-      {uploadMutation.isPending && (
+      {(uploadMutation.isPending || convertMutation.isPending) && (
         <div
           style={{
             position: "fixed",
@@ -377,7 +432,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           }}
         >
           <Progress
-            percent={uploadProgress}
+            percent={convertMutation.isPending ? convertProgress : uploadProgress}
             status="active"
             showInfo
             format={(percent) => `${percent ?? 0}%`}

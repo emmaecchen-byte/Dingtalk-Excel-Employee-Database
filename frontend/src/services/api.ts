@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type AxiosResponse } from "axios";
 import client from "../auth/api";
 
 export interface SyncResultResponse {
@@ -47,6 +47,9 @@ export interface ExcelUploadResponse {
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
     if (typeof detail === "string") {
@@ -75,6 +78,31 @@ export async function parseBlobError(blob: Blob): Promise<string | null> {
   }
 }
 
+async function assertBlobDownload(response: AxiosResponse<Blob>, fallbackError: string): Promise<void> {
+  const contentType = String(response.headers["content-type"] ?? "");
+  if (response.status >= 400 || contentType.includes("application/json")) {
+    const detail = await parseBlobError(response.data as Blob);
+    throw new Error(detail ?? fallbackError);
+  }
+}
+
+export async function requestBlobDownload(
+  request: () => Promise<AxiosResponse<Blob>>,
+  fallbackError: string
+): Promise<AxiosResponse<Blob>> {
+  try {
+    const response = await request();
+    await assertBlobDownload(response, fallbackError);
+    return response;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.data instanceof Blob) {
+      const detail = await parseBlobError(error.response.data);
+      throw new Error(detail ?? fallbackError);
+    }
+    throw error;
+  }
+}
+
 export function triggerBrowserDownload(blob: Blob, filename: string) {
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -98,15 +126,10 @@ function filenameFromContentDisposition(header?: string, fallback?: string): str
  * GET /api/excel/download/{year}/{month} — authenticated blob download.
  */
 export async function downloadExcel(year: number, month: number): Promise<string> {
-  const response = await client.get(`/excel/download/${year}/${month}`, {
-    responseType: "blob",
-  });
-
-  const contentType = String(response.headers["content-type"] ?? "");
-  if (contentType.includes("application/json")) {
-    const detail = await parseBlobError(response.data as Blob);
-    throw new Error(detail ?? "Failed to download Excel file");
-  }
+  const response = await requestBlobDownload(
+    () => client.get(`/excel/download/${year}/${month}`, { responseType: "blob" }),
+    "Failed to download Excel file"
+  );
 
   const filename = filenameFromContentDisposition(
     response.headers["content-disposition"],
@@ -150,8 +173,55 @@ export async function uploadExcel(
 }
 
 /**
- * POST /api/excel/upload-dingtalk-source — upload original DingTalk 月度汇总
- * and download generated 4-sheet workbook.
+ * POST /api/attendance/upload-and-convert — upload DingTalk 月度汇总 and download 4-sheet workbook.
+ */
+export async function uploadAndConvertAttendance(
+  file: File,
+  options?: { year?: number; month?: number; onProgress?: (percent: number) => void }
+): Promise<string> {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Only .xlsx files are supported");
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  if (options?.year) {
+    formData.append("year", String(options.year));
+  }
+  if (options?.month) {
+    formData.append("month", String(options.month));
+  }
+
+  const response = await requestBlobDownload(
+    () =>
+      client.post("/attendance/upload-and-convert", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        responseType: "blob",
+        onUploadProgress: (event) => {
+          if (!event.total) {
+            return;
+          }
+          options?.onProgress?.(Math.round((event.loaded * 100) / event.total));
+        },
+      }),
+    "Failed to convert uploaded attendance file"
+  );
+
+  const fallbackYear = options?.year ?? new Date().getFullYear();
+  const fallbackMonth = options?.month ?? new Date().getMonth() + 1;
+  const filename = filenameFromContentDisposition(
+    response.headers["content-disposition"],
+    `attendance_full_${fallbackYear}_${String(fallbackMonth).padStart(2, "0")}.xlsx`
+  );
+  const blob = new Blob([response.data], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  triggerBrowserDownload(blob, filename);
+  return filename;
+}
+
+/**
+ * POST /api/excel/upload-dingtalk-source — legacy alias for upload-and-convert.
  */
 export async function uploadDingTalkSourceAndDownloadFullExcel(
   year: number,
@@ -159,41 +229,7 @@ export async function uploadDingTalkSourceAndDownloadFullExcel(
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  if (!file.name.toLowerCase().endsWith(".xlsx")) {
-    throw new Error("Only .xlsx files are supported");
-  }
-
-  const formData = new FormData();
-  formData.append("year", String(year));
-  formData.append("month", String(month));
-  formData.append("file", file);
-
-  const response = await client.post("/excel/upload-dingtalk-source", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
-    responseType: "blob",
-    onUploadProgress: (event) => {
-      if (!event.total) {
-        return;
-      }
-      onProgress?.(Math.round((event.loaded * 100) / event.total));
-    },
-  });
-
-  const contentType = String(response.headers["content-type"] ?? "");
-  if (contentType.includes("application/json")) {
-    const detail = await parseBlobError(response.data as Blob);
-    throw new Error(detail ?? "Failed to generate full Excel file");
-  }
-
-  const filename = filenameFromContentDisposition(
-    response.headers["content-disposition"],
-    `attendance_full_${year}_${String(month).padStart(2, "0")}.xlsx`
-  );
-  const blob = new Blob([response.data], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  triggerBrowserDownload(blob, filename);
-  return filename;
+  return uploadAndConvertAttendance(file, { year, month, onProgress });
 }
 
 export interface ValidationIssue {

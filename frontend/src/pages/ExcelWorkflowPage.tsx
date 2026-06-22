@@ -1,48 +1,38 @@
-import { useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Alert,
   Button,
   Card,
   Layout,
-  List,
-  Progress,
   Select,
   Space,
   Tabs,
-  Tag,
   Typography,
   message,
 } from "antd";
-import { ArrowLeftOutlined, DownloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, DownloadOutlined } from "@ant-design/icons";
 import {
-  AttendanceUploadResponse,
   downloadExcel,
   getApiErrorMessage,
-  uploadAttendanceExcel,
+  uploadAndConvertAttendance,
 } from "../services/api";
+import AttendanceConvertUpload from "../components/AttendanceConvertUpload";
+import { useLanguage } from "../i18n/LanguageContext";
 
 const { Header, Content } = Layout;
 const { Title, Paragraph, Text } = Typography;
 
 const MONTH_NAMES = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
 
-function severityColor(severity: string) {
-  if (severity === "Error") return "red";
-  if (severity === "Warning") return "orange";
-  return "blue";
-}
-
 export default function ExcelWorkflowPage() {
-  const navigate = useNavigate();
+  const { t } = useLanguage();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [downloading, setDownloading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadResult, setUploadResult] = useState<AttendanceUploadResponse | null>(null);
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -72,29 +62,17 @@ export default function ExcelWorkflowPage() {
   const handleUploadSource = async (file: File) => {
     try {
       setUploading(true);
-      setUploadResult(null);
-      const parsed = await uploadAttendanceExcel(file, {
+      const filename = await uploadAndConvertAttendance(file, {
         year,
         month,
         onProgress: setUploadProgress,
       });
-      setUploadResult(parsed);
-
-      if (parsed.has_blocking_errors) {
-        message.error("上传完成，但存在阻断性校验错误，请修正后重试");
-        return;
-      }
-
-      message.success(`已解析 ${parsed.employee_count} 名员工，写入 ${parsed.daily_record_count} 条日考勤记录`);
-      navigate(`/attendance-table/${parsed.period_id}`);
+      message.success(`四表考勤 Excel 已开始下载：${filename}`);
     } catch (error) {
-      message.error(getApiErrorMessage(error, "上传钉钉原始月度汇总失败"));
+      message.error(getApiErrorMessage(error, "上传并转换考勤表失败"));
     } finally {
       setUploading(false);
       setUploadProgress(0);
-      if (uploadInputRef.current) {
-        uploadInputRef.current.value = "";
-      }
     }
   };
 
@@ -116,7 +94,7 @@ export default function ExcelWorkflowPage() {
             </Button>
           </Link>
           <Title level={4} style={{ color: "#fff", margin: 0 }}>
-            Excel 两步流程
+            {t("excelWorkflow")}
           </Title>
         </Space>
       </Header>
@@ -160,55 +138,18 @@ export default function ExcelWorkflowPage() {
                     type="info"
                     showIcon
                     style={{ marginBottom: 12 }}
-                    message="上传钉钉原始月度汇总后，系统会先解析并写入数据库，再生成四表Excel。"
-                  />
-                  <input
-                    ref={uploadInputRef}
-                    type="file"
-                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    hidden
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) {
-                        void handleUploadSource(file);
-                      }
-                    }}
+                    message="上传钉钉原始月度汇总后，系统将解析数据并生成签字/情况说明/月度汇总/加班结算四表 Excel，并自动下载。"
                   />
                   <Space direction="vertical" style={{ width: "100%" }}>
-                    <Button
-                      icon={<UploadOutlined />}
+                    <AttendanceConvertUpload
+                      year={year}
+                      month={month}
                       loading={uploading}
-                      onClick={() => uploadInputRef.current?.click()}
-                    >
-                      上传钉钉月度汇总（解析 + 生成四表）
-                    </Button>
-                    {uploading && <Progress percent={uploadProgress} status="active" />}
-                    {uploadResult && (
-                      <Alert
-                        type={uploadResult.has_blocking_errors ? "error" : "success"}
-                        showIcon
-                        message={
-                          uploadResult.has_blocking_errors
-                            ? "校验未通过，数据未完整写入"
-                            : `解析成功：${uploadResult.employee_count} 名员工，${uploadResult.requires_review_count} 项需复核`
-                        }
-                      />
-                    )}
-                    {uploadResult && uploadResult.validation_issues.length > 0 && (
-                      <List
-                        size="small"
-                        bordered
-                        dataSource={uploadResult.validation_issues}
-                        renderItem={(issue) => (
-                          <List.Item>
-                            <Space>
-                              <Tag color={severityColor(issue.severity)}>{issue.severity}</Tag>
-                              <Text>{issue.message}</Text>
-                            </Space>
-                          </List.Item>
-                        )}
-                      />
-                    )}
+                      progress={uploadProgress}
+                      label="上传并转换考勤表"
+                      hint="上传钉钉月度汇总，自动生成签字/情况说明/月度汇总/加班结算四表 Excel，并自动下载。"
+                      onFileSelected={handleUploadSource}
+                    />
                   </Space>
                 </Card>
               ),

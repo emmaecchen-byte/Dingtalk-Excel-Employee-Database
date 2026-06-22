@@ -479,7 +479,14 @@ def load_workbook_from_template(
     return build_attendance_workbook(year, month, employees)
 
 
-def populate_sign_sheet(ws, records: Sequence[MonthlyAttendance], year: int, month: int) -> None:
+def populate_sign_sheet(
+    ws,
+    records: Sequence[MonthlyAttendance],
+    year: int,
+    month: int,
+    *,
+    rules=None,
+) -> None:
     """Sheet 1 签字: two rows per employee (上午 / 下午) with identical symbols in D–AH."""
     write_sign_sheet_headers(ws, year, month)
     write_sign_sheet_legend(ws)
@@ -497,7 +504,7 @@ def populate_sign_sheet(ws, records: Sequence[MonthlyAttendance], year: int, mon
                 ws.cell(row=pm_row, column=col, value=None)
                 continue
             day_value = resolve_day_value(record, day)
-            symbol = map_sign_sheet_status(day_value)
+            symbol = map_sign_sheet_status(day_value, rules)
             if not symbol:
                 ws.cell(row=am_row, column=col, value=None)
                 ws.cell(row=pm_row, column=col, value=None)
@@ -628,6 +635,7 @@ def populate_workbook(
     month: int,
     *,
     generated_at: Optional[datetime] = None,
+    rules=None,
 ) -> None:
     sign_ws = workbook[TEMPLATE_SHEETS[0]]
     situation_ws = workbook[TEMPLATE_SHEETS[1]]
@@ -636,7 +644,7 @@ def populate_workbook(
         monthly_ws.title = TEMPLATE_SHEETS[2]
     overtime_ws = workbook[TEMPLATE_SHEETS[3]]
 
-    populate_sign_sheet(sign_ws, records, year, month)
+    populate_sign_sheet(sign_ws, records, year, month, rules=rules)
     populate_situation_sheet(situation_ws, records, year, month)
     populate_monthly_sheet(monthly_ws, records, year, month, generated_at=generated_at)
     populate_overtime_sheet(overtime_ws, records, year, month)

@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Divider,
   Input,
   Layout,
   Select,
@@ -20,15 +21,14 @@ import {
   GlobalOutlined,
   HistoryOutlined,
   LogoutOutlined,
-  ProfileOutlined,
   TableOutlined,
-  UploadOutlined,
   UserAddOutlined,
   UserOutlined,
   ApiOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { useAuth } from "../auth/AuthContext";
+import AttendanceConvertUpload from "../components/AttendanceConvertUpload";
 import CloneMonthModal from "../components/CloneMonthModal";
 import ConflictResolutionModal from "../components/ConflictResolutionModal";
 import EmployeeTable from "../components/EmployeeTable";
@@ -81,8 +81,9 @@ function DashboardContent() {
     attendanceLoading,
     syncing,
     syncStatusMessage,
-    uploading,
     downloading,
+    converting,
+    convertProgress,
     exportingPdf,
     search,
     setSearch,
@@ -100,12 +101,13 @@ function DashboardContent() {
     handleSync,
     handleDownloadExcel,
     handleExportPdf,
-    triggerUpload,
+    handleConvertUpload,
     handleDataChange,
     syncRefreshToken,
     bumpSyncRefresh,
     conflictModalOpen,
     setConflictModalOpen,
+    canActOnSelectedPeriod,
   } = useDashboard();
 
   const [versionModalOpen, setVersionModalOpen] = useState(false);
@@ -161,7 +163,7 @@ function DashboardContent() {
           {isHrAdmin && (
             <Link to="/rule-config">
               <Button type="text" icon={<SettingOutlined />} style={{ color: "#fff" }}>
-                规则配置
+                {t("ruleConfigNav")}
               </Button>
             </Link>
           )}
@@ -204,12 +206,7 @@ function DashboardContent() {
             )}
             {canSync && (
               <Link to="/attendance-list">
-                <Button icon={<HistoryOutlined />}>考勤记录</Button>
-              </Link>
-            )}
-            {canSync && (
-              <Link to="/excel-workflow">
-                <Button icon={<ProfileOutlined />}>Excel流程</Button>
+                <Button icon={<HistoryOutlined />}>{t("attendanceRecords")}</Button>
               </Link>
             )}
             {canSync && (
@@ -222,15 +219,22 @@ function DashboardContent() {
                 icon={<DownloadOutlined />}
                 loading={downloading}
                 onClick={() => void handleDownloadExcel()}
-                disabled={!data}
+                disabled={!canActOnSelectedPeriod}
               >
                 {t("downloadExcel")}
               </Button>
             )}
+            {canSync && <Divider type="vertical" style={{ height: 24, margin: "0 4px" }} />}
             {canSync && (
-              <Button icon={<UploadOutlined />} loading={uploading} onClick={triggerUpload} disabled={!data}>
-                {t("uploadExcel")}
-              </Button>
+              <AttendanceConvertUpload
+                year={year}
+                month={month}
+                loading={converting}
+                progress={convertProgress}
+                label={t("uploadConvertExcel")}
+                hint={t("uploadConvertExcelHint")}
+                onFileSelected={handleConvertUpload}
+              />
             )}
             {canSync && (
               <Button
@@ -241,14 +245,14 @@ function DashboardContent() {
                   event.preventDefault();
                   void handleExportPdf(true);
                 }}
-                disabled={!data}
+                disabled={!canActOnSelectedPeriod}
                 title={t("exportPdfHint")}
               >
                 {t("exportPdf")}
               </Button>
             )}
             {isHrAdmin && (
-              <Button icon={<CopyOutlined />} onClick={() => setCloneModalOpen(true)} disabled={!data}>
+              <Button icon={<CopyOutlined />} onClick={() => setCloneModalOpen(true)} disabled={!canActOnSelectedPeriod}>
                 {t("cloneMonth")}
               </Button>
             )}

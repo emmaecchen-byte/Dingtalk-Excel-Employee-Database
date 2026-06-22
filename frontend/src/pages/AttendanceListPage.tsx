@@ -37,6 +37,7 @@ import {
 import { exportPeriodExcel, exportPeriodPdf } from "../services/periodExport";
 import { getApiErrorMessage } from "../services/api";
 import { useAuth } from "../auth/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -55,6 +56,7 @@ function formatDateTime(value?: string | null) {
 export default function AttendanceListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { t } = useLanguage();
   const isAdmin = user?.role === "hr_admin";
   const [periods, setPeriods] = useState<AttendancePeriodSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -280,7 +282,7 @@ export default function AttendanceListPage() {
             </Button>
           </Link>
           <Title level={4} style={{ color: "#fff", margin: 0 }}>
-            考勤记录 / 历史列表
+            {t("attendanceRecordsPageTitle")}
           </Title>
         </Space>
         <Space>

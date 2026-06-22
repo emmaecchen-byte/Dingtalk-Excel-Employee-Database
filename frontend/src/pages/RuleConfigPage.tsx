@@ -26,6 +26,7 @@ import {
   updateAttendanceRule,
 } from "../services/rules";
 import { getApiErrorMessage } from "../services/api";
+import { useLanguage } from "../i18n/LanguageContext";
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
@@ -44,6 +45,7 @@ const EMPTY_RULE: AttendanceRulePayload = {
 };
 
 export default function RuleConfigPage() {
+  const { t } = useLanguage();
   const [rules, setRules] = useState<EditableRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -274,7 +276,7 @@ export default function RuleConfigPage() {
             </Button>
           </Link>
           <Title level={4} style={{ color: "#fff", margin: 0 }}>
-            考勤规则配置
+            {t("ruleConfig")}
           </Title>
         </Space>
         <Space>

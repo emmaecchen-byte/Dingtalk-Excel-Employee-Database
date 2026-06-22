@@ -1,10 +1,13 @@
 import client from "./auth/api";
+import { requestBlobDownload } from "./services/api";
 import type { AttendanceSheetsResponse } from "./types/attendanceSheets";
 
 export {
   downloadExcel,
   getApiErrorMessage,
   syncAll,
+  uploadAndConvertAttendance,
+  uploadDingTalkSourceAndDownloadFullExcel,
   uploadExcel,
   type ExcelFieldChange,
   type ExcelUploadConflictPreview,
@@ -122,9 +125,10 @@ export async function downloadPdf(
   month: number,
   options: { openInNewTab?: boolean } = {}
 ) {
-  const response = await client.get(`/attendance/export/pdf/${year}/${month}`, {
-    responseType: "blob",
-  });
+  const response = await requestBlobDownload(
+    () => client.get(`/attendance/export/pdf/${year}/${month}`, { responseType: "blob" }),
+    "Failed to export PDF"
+  );
   const blob = new Blob([response.data], { type: "application/pdf" });
   const url = window.URL.createObjectURL(blob);
   const filename = `attendance_${year}_${String(month).padStart(2, "0")}.pdf`;
