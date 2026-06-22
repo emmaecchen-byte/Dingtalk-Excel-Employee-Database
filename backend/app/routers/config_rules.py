@@ -18,6 +18,7 @@ from app.schemas import (
     AttendanceRuleResponse,
     AttendanceRuleUpdateRequest,
 )
+from app.services.attendance_rule_engine import ensure_default_rules, invalidate_company_rules_cache
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,6 @@ def list_attendance_rules(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ADMIN_ROLES)),
 ):
-    from app.services.attendance_rule_engine import ensure_default_rules
-
     ensure_default_rules(db, current_user.company_id)
     rules = attendance_rule.list_for_company(db, current_user.company_id)
     return AttendanceRuleListResponse(
@@ -85,6 +84,7 @@ def create_attendance_rule(
     db.add(rule)
     db.commit()
     db.refresh(rule)
+    invalidate_company_rules_cache(current_user.company_id)
     logger.info("Attendance rule created: id=%s company_id=%s keyword=%s", rule.id, rule.company_id, rule.raw_keyword)
     return _serialize_rule(rule)
 
@@ -118,6 +118,7 @@ def update_attendance_rule(
     rule.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(rule)
+    invalidate_company_rules_cache(current_user.company_id)
     return _serialize_rule(rule)
 
 
@@ -132,5 +133,6 @@ def delete_attendance_rule(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
     db.delete(rule)
     db.commit()
+    invalidate_company_rules_cache(current_user.company_id)
     logger.info("Attendance rule deleted: id=%s company_id=%s", rule_id, current_user.company_id)
     return None

@@ -98,6 +98,25 @@
   font-weight: 600;
 }
 
-.attendance-period-grid .shift-cell {
-  color: #595959;
+.attendance-period-grid .weekend-cell {
+  background: #f5f5f5;
+}
+
+.attendance-period-grid .day-cell.saving {
+  opacity: 0.65;
+}
+
+.attendance-period-grid-footer {
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.attendance-period-grid .virtual-spacer td {
+  padding: 0;
+  border: none;
+  background: transparent;
 }

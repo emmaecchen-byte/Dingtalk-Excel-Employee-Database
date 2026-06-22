@@ -77,3 +77,34 @@ def ensure_auth_schema() -> None:
                     conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN archived_by INTEGER"))
                 if "archived_at" not in period_columns:
                     conn.execute(text("ALTER TABLE attendance_periods ADD COLUMN archived_at DATETIME"))
+
+            if not _sqlite_table_exists(engine, "edit_logs"):
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE edit_logs (
+                            id VARCHAR(36) PRIMARY KEY,
+                            period_id INTEGER NOT NULL,
+                            company_id INTEGER NOT NULL,
+                            user_id INTEGER,
+                            user_name VARCHAR(100),
+                            entity_type VARCHAR(50) NOT NULL,
+                            entity_id INTEGER NOT NULL,
+                            field_name VARCHAR(80) NOT NULL,
+                            old_value TEXT,
+                            new_value TEXT,
+                            action VARCHAR(20) NOT NULL DEFAULT 'update',
+                            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY(period_id) REFERENCES attendance_periods(id) ON DELETE CASCADE,
+                            FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+                        )
+                        """
+                    )
+                )
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_edit_logs_period ON edit_logs(period_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_edit_logs_user ON edit_logs(user_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_edit_logs_created_at ON edit_logs(created_at)"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_edit_logs_entity ON edit_logs(entity_type, entity_id)")
+                )

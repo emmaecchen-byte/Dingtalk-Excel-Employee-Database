@@ -10,9 +10,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_roles
-from app.crud.abnormal_record import abnormal_record, abnormal_record_edit_log
+from app.crud.abnormal_record import abnormal_record
 from app.database import get_db
 from app.models import AbnormalRecord, User
+from app.services.audit_log import (
+    log_abnormal_record_change,
+    log_abnormal_record_created,
+    log_abnormal_record_deleted,
+)
 from app.schemas import (
     AbnormalRecordCreateRequest,
     AbnormalRecordEditLogResponse,
@@ -26,7 +31,7 @@ from app.services.period_workflow import PeriodWorkflowError, assert_period_edit
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/attendance", tags=["attendance-exceptions"])
+router = APIRouter(tags=["attendance-exceptions"])
 
 HR_ROLES = ["hr_admin", "hr_viewer"]
 
@@ -130,6 +135,15 @@ def create_exception_record(
         notes=body.notes,
     )
     db.add(record)
+    db.flush()
+    log_abnormal_record_created(
+        db,
+        period_id=period_id,
+        company_id=current_user.company_id,
+        abnormal_record_id=record.id,
+        user=current_user,
+        summary=record.summary or record.employee_name,
+    )
     db.commit()
     db.refresh(record)
     return _serialize_record(record)
@@ -159,11 +173,12 @@ def update_exception_record(
         if old_text == new_text:
             continue
         setattr(record, field_name, new_value)
-        abnormal_record_edit_log.log_change(
+        log_abnormal_record_change(
             db,
+            period_id=record.period_id,
+            company_id=current_user.company_id,
             abnormal_record_id=record.id,
-            edited_by=current_user.id,
-            editor_name=current_user.name,
+            user=current_user,
             field_name=field_name,
             old_value=old_text,
             new_value=new_text,
@@ -188,6 +203,18 @@ def delete_exception_record(
         _require_mutable_period(db, record.period_id, current_user.company_id)
     except PeriodWorkflowError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    summary = record.summary or record.employee_name
+    period_id = record.period_id
+    company_id = current_user.company_id
+    record_id = record.id
+    log_abnormal_record_deleted(
+        db,
+        period_id=period_id,
+        company_id=company_id,
+        abnormal_record_id=record_id,
+        user=current_user,
+        summary=summary,
+    )
     db.delete(record)
     db.commit()
     return None

@@ -10,7 +10,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from sqlalchemy.orm import Session, joinedload
 
 from app.excel.template_generator import SIGN_COUNT_SYMBOLS, count_month_work_days
-from app.crud.attendance_period_edit_log import attendance_period_edit_log
+from app.services.audit_log import log_daily_attendance_change
+from app.crud.daily_attendance import daily_attendance
 from app.models import AttendancePeriod, DailyAttendance, EmployeeAttendance, User
 from app.services.attendance_rule_engine import (
     ResolvedAttendanceRule,
@@ -288,16 +289,7 @@ def build_period_table(
 
 
 def get_daily_for_company(db: Session, daily_id: int, company_id: int) -> DailyAttendance:
-    record = (
-        db.query(DailyAttendance)
-        .join(EmployeeAttendance, DailyAttendance.employee_attendance_id == EmployeeAttendance.id)
-        .join(AttendancePeriod, EmployeeAttendance.period_id == AttendancePeriod.id)
-        .filter(
-            DailyAttendance.id == daily_id,
-            AttendancePeriod.company_id == company_id,
-        )
-        .first()
-    )
+    record = daily_attendance.get_for_company(db, daily_id, company_id)
     if not record:
         raise AttendanceTableError("Daily attendance record not found", status_code=404)
     return record
@@ -340,6 +332,8 @@ def patch_daily_cell(
     old_text = (old_value or "").strip()
     if old_text == normalized:
         symbol = status_to_symbol(normalized, rules)
+        morning_symbol = status_to_symbol(record.morning_status, rules)
+        afternoon_symbol = status_to_symbol(record.afternoon_status, rules)
         daily_by_day = {item.day: item for item in employee_row.daily_records}
         return {
             "daily_id": record.id,
@@ -347,6 +341,10 @@ def patch_daily_cell(
             "shift": shift,
             "status": normalized,
             "symbol": symbol,
+            "morning_status": record.morning_status or "",
+            "afternoon_status": record.afternoon_status or "",
+            "morning_symbol": morning_symbol,
+            "afternoon_symbol": afternoon_symbol,
             "raw_text": record.raw_text or "",
             "requires_review": record.requires_review,
             "employee_attendance_id": employee_row.id,
@@ -367,13 +365,13 @@ def patch_daily_cell(
     symbol = status_to_symbol(normalized, rules)
     requires_review = matched is None and bool(normalized)
 
-    if shift == "morning":
-        record.morning_status = normalized or None
-    else:
-        record.afternoon_status = normalized or None
-
+    daily_attendance.update_shift_status(
+        record,
+        shift=shift,
+        status=normalized,
+        requires_review=requires_review,
+    )
     record.raw_text = combine_raw_text(record.morning_status, record.afternoon_status) or None
-    record.requires_review = requires_review
 
     daily_by_day = {item.day: item for item in employee_row.daily_records}
     daily_by_day[record.day] = record
@@ -381,13 +379,13 @@ def patch_daily_cell(
     period.updated_at = datetime.utcnow()
 
     field_name = f"day_{record.day}_{shift}"
-    attendance_period_edit_log.log_change(
+    log_daily_attendance_change(
         db,
         period_id=period.id,
+        company_id=company_id,
         daily_attendance_id=record.id,
         employee_name=employee_row.employee_name,
-        edited_by=user.id if user else None,
-        editor_name=user.name if user else None,
+        user=user,
         field_name=field_name,
         old_value=old_text or None,
         new_value=normalized or None,
@@ -400,6 +398,8 @@ def patch_daily_cell(
     employee_totals = compute_employee_totals(
         daily_by_day, year=period.year, month=period.month, rules=rules
     )
+    morning_symbol = status_to_symbol(record.morning_status, rules)
+    afternoon_symbol = status_to_symbol(record.afternoon_status, rules)
 
     return {
         "daily_id": record.id,
@@ -407,6 +407,10 @@ def patch_daily_cell(
         "shift": shift,
         "status": normalized,
         "symbol": symbol,
+        "morning_status": record.morning_status or "",
+        "afternoon_status": record.afternoon_status or "",
+        "morning_symbol": morning_symbol,
+        "afternoon_symbol": afternoon_symbol,
         "raw_text": record.raw_text or "",
         "requires_review": record.requires_review,
         "employee_attendance_id": employee_row.id,

@@ -5,6 +5,8 @@ import Dashboard from "./pages/Dashboard";
 import AttendanceSheetsPage from "./pages/AttendanceSheetsPage";
 import DingTalkCallbackPage from "./pages/DingTalkCallbackPage";
 import AttendanceListPage from "./pages/AttendanceListPage";
+import PeriodList from "./pages/PeriodList";
+import AttendanceEditor from "./pages/AttendanceEditor";
 import AttendancePeriodTablePage from "./pages/AttendancePeriodTablePage";
 import ExceptionPage from "./pages/ExceptionPage";
 import ExcelWorkflowPage from "./pages/ExcelWorkflowPage";
@@ -60,6 +62,22 @@ export default function App() {
             }
           />
           <Route
+            path="/period-list"
+            element={
+              <ErrorBoundary title="Period list error">
+                <PeriodList />
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/attendance-editor/:periodId"
+            element={
+              <ErrorBoundary title="Attendance editor error">
+                <AttendanceEditor />
+              </ErrorBoundary>
+            }
+          />
+          <Route
             path="/attendance-table/:periodId"
             element={
               <ErrorBoundary title="Attendance table error">
@@ -71,6 +89,14 @@ export default function App() {
             path="/exceptions/:periodId"
             element={
               <ErrorBoundary title="Exception page error">
+                <ExceptionPage />
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/exception-manager/:periodId"
+            element={
+              <ErrorBoundary title="Exception manager error">
                 <ExceptionPage />
               </ErrorBoundary>
             }

@@ -574,6 +574,10 @@ class DailyAttendancePatchResponse(BaseModel):
     shift: str
     status: str
     symbol: str
+    morning_status: str = ""
+    afternoon_status: str = ""
+    morning_symbol: str = ""
+    afternoon_symbol: str = ""
     raw_text: str
     requires_review: bool
     employee_attendance_id: int
@@ -705,7 +709,9 @@ class AttendancePeriodSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     confirmed_at: Optional[datetime] = None
+    confirmed_by_name: Optional[str] = None
     archived_at: Optional[datetime] = None
+    archived_by_name: Optional[str] = None
     source_filename: Optional[str] = None
 
 
@@ -727,3 +733,23 @@ class AttendancePeriodEditLogResponse(BaseModel):
     employee_name: Optional[str] = None
     editor_name: Optional[str] = None
     edited_at: datetime
+
+
+class EditLogResponse(BaseModel):
+    id: str
+    period_id: int
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
+    entity_type: str
+    entity_id: int
+    field_name: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    action: str
+    created_at: datetime
+
+
+class EditLogListResponse(BaseModel):
+    period_id: int
+    total: int
+    logs: List[EditLogResponse] = Field(default_factory=list)

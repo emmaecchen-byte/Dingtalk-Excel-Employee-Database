@@ -36,6 +36,7 @@ import PendingUpdatesWidget from "../components/PendingUpdatesWidget";
 import SummaryCards from "../components/SummaryCards";
 import VersionHistoryModal from "../components/VersionHistoryModal";
 import { DashboardProvider, useDashboard } from "../context/DashboardContext";
+import { PERIOD_STATUS_LABELS } from "../services/attendancePeriods";
 import { useLanguage } from "../i18n/LanguageContext";
 
 const { Header, Content } = Layout;
@@ -57,6 +58,12 @@ const MONTH_NAMES: Record<"zh" | "en", string[]> = {
   zh: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
   en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
 };
+
+function periodStatusColor(status: "draft" | "confirmed" | "archived") {
+  if (status === "archived") return "default";
+  if (status === "confirmed") return "green";
+  return "gold";
+}
 
 export default function Dashboard() {
   return (
@@ -108,6 +115,9 @@ function DashboardContent() {
     conflictModalOpen,
     setConflictModalOpen,
     canActOnSelectedPeriod,
+    selectedAttendancePeriod,
+    selectedPeriodStatus,
+    isSelectedPeriodReadOnly,
   } = useDashboard();
 
   const [versionModalOpen, setVersionModalOpen] = useState(false);
@@ -186,6 +196,15 @@ function DashboardContent() {
       </Header>
 
       <Content style={{ padding: 24, maxWidth: 1200, margin: "0 auto", width: "100%" }}>
+        {isSelectedPeriodReadOnly && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t("archivedPeriodReadOnly")}
+          />
+        )}
+
         {syncStatusMessage && (
           <Alert
             message={syncStatusMessage}
@@ -199,6 +218,18 @@ function DashboardContent() {
           <Space wrap>
             <Select value={year} onChange={setYear} options={yearOptions} />
             <Select value={month} onChange={setMonth} options={monthOptions} />
+            {selectedPeriodStatus && (
+              <Tag color={periodStatusColor(selectedPeriodStatus)}>
+                {PERIOD_STATUS_LABELS[selectedPeriodStatus]}
+              </Tag>
+            )}
+            {isSelectedPeriodReadOnly && selectedAttendancePeriod && (
+              <Link to={`/attendance-table/${selectedAttendancePeriod.id}`}>
+                <Button size="small" type="link">
+                  {t("viewArchivedPeriod")}
+                </Button>
+              </Link>
+            )}
             {canSync && (
               <Link to={`/sheets?year=${year}&month=${month}`}>
                 <Button icon={<TableOutlined />}>{t("attendanceSheets")}</Button>
@@ -210,7 +241,13 @@ function DashboardContent() {
               </Link>
             )}
             {canSync && (
-              <Button type="primary" icon={<CloudSyncOutlined />} loading={syncing} onClick={() => void handleSync()}>
+              <Button
+                type="primary"
+                icon={<CloudSyncOutlined />}
+                loading={syncing}
+                disabled={isSelectedPeriodReadOnly}
+                onClick={() => void handleSync()}
+              >
                 {t("syncDingTalk")}
               </Button>
             )}

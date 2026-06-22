@@ -85,6 +85,13 @@ def _period_counts(db: Session, period_id: int) -> tuple[int, int]:
     return int(employee_count), int(exception_count)
 
 
+def _user_display_name(db: Session, user_id: Optional[int]) -> Optional[str]:
+    if not user_id:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    return user.name if user else None
+
+
 def serialize_period_summary(db: Session, period: AttendancePeriod) -> dict:
     employee_count, exception_count = _period_counts(db, period.id)
     display_status = normalize_display_status(period.status)
@@ -102,7 +109,9 @@ def serialize_period_summary(db: Session, period: AttendancePeriod) -> dict:
         "created_at": period.created_at,
         "updated_at": period.updated_at,
         "confirmed_at": period.confirmed_at,
+        "confirmed_by_name": _user_display_name(db, period.confirmed_by),
         "archived_at": period.archived_at,
+        "archived_by_name": _user_display_name(db, period.archived_by),
         "source_filename": period.source_filename,
     }
 
@@ -112,8 +121,14 @@ def list_company_periods(
     company_id: int,
     *,
     status: Optional[str] = None,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
 ) -> List[dict]:
     query = db.query(AttendancePeriod).filter(AttendancePeriod.company_id == company_id)
+    if year is not None:
+        query = query.filter(AttendancePeriod.year == year)
+    if month is not None:
+        query = query.filter(AttendancePeriod.month == month)
     if status:
         if status == "draft":
             query = query.filter(AttendancePeriod.status.in_(("draft", "validated", "failed")))

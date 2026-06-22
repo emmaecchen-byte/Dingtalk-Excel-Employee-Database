@@ -10,8 +10,6 @@ from app.database import SessionLocal
 from app.db_upgrade import ensure_auth_schema
 from app.seed import seed_database
 from app import routes
-from app.routers import attendance_exceptions as attendance_exceptions_router
-from app.routers import attendance_periods as attendance_periods_router
 from app.routers import attendance_upload as attendance_upload_router
 from app.api import attendance as attendance_api_router
 from app.routers import config_rules as config_rules_router
@@ -53,9 +51,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(attendance_upload_router.router)
 app.include_router(attendance_api_router.router)
-app.include_router(attendance_periods_router.router)
 app.include_router(config_rules_router.router)
-app.include_router(attendance_exceptions_router.router)
 app.include_router(sync_router.router)
 app.include_router(conflicts_router.router)
 app.include_router(versions_router.router)

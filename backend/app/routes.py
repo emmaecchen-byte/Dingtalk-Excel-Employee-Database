@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import MonthlyAttendance, User
 from app.services.pdf_generator import AttendancePdfError, generate_attendance_pdf
+from app.services.pdf_export import PeriodExportError, generate_period_pdf_for_month
 from app.services.sync_counts import count_pending_conflicts, count_pending_updates
 from app.schemas import (
     AttendancePatchRequest,
@@ -214,14 +215,22 @@ def export_attendance_pdf(
         )
 
     try:
-        result = generate_attendance_pdf(
-            db,
-            company_id=current_user.company_id,
-            year=year,
-            month=month,
-            generated_by=current_user.name,
-        )
-    except AttendancePdfError as exc:
+        try:
+            result = generate_period_pdf_for_month(
+                db,
+                company_id=current_user.company_id,
+                year=year,
+                month=month,
+            )
+        except PeriodExportError:
+            result = generate_attendance_pdf(
+                db,
+                company_id=current_user.company_id,
+                year=year,
+                month=month,
+                generated_by=current_user.name,
+            )
+    except (PeriodExportError, AttendancePdfError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=exc.message) from exc
     except Exception as exc:
         logger.exception(

@@ -24,6 +24,11 @@ import {
   uploadExcel,
   type ExcelUploadResponse,
 } from "../services/api";
+import {
+  AttendancePeriodSummary,
+  PeriodDisplayStatus,
+  fetchAttendancePeriodForMonth,
+} from "../services/attendancePeriods";
 import { calculateStatsFromEmployees } from "../lib/attendanceStats";
 import { useLanguage } from "../i18n/LanguageContext";
 import { dashboardKeys } from "../hooks/dashboardKeys";
@@ -81,6 +86,9 @@ interface DashboardContextValue {
   conflictModalOpen: boolean;
   setConflictModalOpen: (open: boolean) => void;
   canActOnSelectedPeriod: boolean;
+  selectedAttendancePeriod: AttendancePeriodSummary | null;
+  selectedPeriodStatus: PeriodDisplayStatus | null;
+  isSelectedPeriodReadOnly: boolean;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -116,6 +124,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     retry: 1,
   });
 
+  const attendancePeriodQuery = useQuery({
+    queryKey: dashboardKeys.attendancePeriod(selectedYear, selectedMonth),
+    queryFn: () => fetchAttendancePeriodForMonth(selectedYear, selectedMonth),
+    retry: 1,
+  });
+
   const syncStatusQuery = useSyncStatusQuery(true);
 
   useEffect(() => {
@@ -141,8 +155,11 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   const data = localData;
   const employeeData = data?.employees ?? [];
+  const selectedAttendancePeriod = attendancePeriodQuery.data ?? null;
+  const selectedPeriodStatus = selectedAttendancePeriod?.display_status ?? null;
+  const isSelectedPeriodReadOnly = selectedAttendancePeriod?.is_read_only ?? false;
   const canActOnSelectedPeriod = Boolean(
-    data && data.year === selectedYear && data.month === selectedMonth
+    data && data.year === selectedYear && data.month === selectedMonth && !isSelectedPeriodReadOnly
   );
 
   const stats = useMemo(() => {
@@ -173,6 +190,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const refreshAll = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: dashboardKeys.attendance(selectedYear, selectedMonth) }),
+      queryClient.invalidateQueries({
+        queryKey: dashboardKeys.attendancePeriod(selectedYear, selectedMonth),
+      }),
       queryClient.invalidateQueries({ queryKey: dashboardKeys.syncStatus() }),
     ]);
     bumpSyncRefresh();
@@ -363,6 +383,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       conflictModalOpen,
       setConflictModalOpen,
       canActOnSelectedPeriod,
+      selectedAttendancePeriod,
+      selectedPeriodStatus,
+      isSelectedPeriodReadOnly,
     }),
     [
       selectedYear,
@@ -370,6 +393,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       employeeData,
       data,
       canActOnSelectedPeriod,
+      selectedAttendancePeriod,
+      selectedPeriodStatus,
+      isSelectedPeriodReadOnly,
       stats,
       isLoading,
       attendanceQuery.isLoading,

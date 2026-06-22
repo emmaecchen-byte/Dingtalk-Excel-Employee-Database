@@ -90,6 +90,22 @@ def _get_or_create_draft_period(
     uploaded_by: int,
     validation_summary: dict,
 ) -> AttendancePeriod:
+    archived = (
+        db.query(AttendancePeriod)
+        .filter(
+            AttendancePeriod.company_id == company_id,
+            AttendancePeriod.year == year,
+            AttendancePeriod.month == month,
+            AttendancePeriod.status == "archived",
+        )
+        .first()
+    )
+    if archived:
+        raise AttendanceUploadError(
+            f"{year}-{month:02d} is archived and read-only. Upload a new revision or contact HR admin.",
+            status_code=403,
+        )
+
     existing = (
         db.query(AttendancePeriod)
         .filter(

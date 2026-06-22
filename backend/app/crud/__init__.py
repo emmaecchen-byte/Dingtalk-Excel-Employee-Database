@@ -4,10 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.crud.attendance_period import (
     attendance_period,
-    daily_attendance,
     employee_attendance,
     match_employee_by_name,
 )
+from app.crud.daily_attendance import daily_attendance
 from app.crud.base import CRUDBase
 from app.models import (
     AttendancePeriod,

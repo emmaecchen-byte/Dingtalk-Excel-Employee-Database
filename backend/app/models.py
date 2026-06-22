@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
+import uuid
 
 from sqlalchemy import (
     Boolean,
@@ -284,6 +285,7 @@ class AttendancePeriod(Base):
 
     employee_rows: Mapped[List["EmployeeAttendance"]] = relationship(back_populates="period")
     edit_logs: Mapped[List["AttendancePeriodEditLog"]] = relationship(back_populates="period")
+    audit_logs: Mapped[List["EditLog"]] = relationship(back_populates="period")
 
 
 class EmployeeAttendance(Base):
@@ -382,6 +384,33 @@ class AttendancePeriodEditLog(Base):
     edited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     period: Mapped["AttendancePeriod"] = relationship(back_populates="edit_logs")
+
+
+class EditLog(Base):
+    """Unified audit log for attendance and exception edits."""
+
+    __tablename__ = "edit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    period_id: Mapped[int] = mapped_column(
+        ForeignKey("attendance_periods.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    user_name: Mapped[Optional[str]] = mapped_column(String(100))
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    field_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    old_value: Mapped[Optional[str]] = mapped_column(Text)
+    new_value: Mapped[Optional[str]] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(String(20), nullable=False, default="update")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+    period: Mapped["AttendancePeriod"] = relationship(back_populates="audit_logs")
 
 
 class AttendanceRule(Base):

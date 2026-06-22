@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from io import BytesIO
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -16,13 +15,11 @@ from app.models import User
 from app.schemas import (
     AttendancePeriodTableResponse,
     AttendanceUploadResponse,
-    DailyAttendancePatchRequest,
-    DailyAttendancePatchResponse,
     ValidationIssueResponse,
 )
-from app.services.attendance_period_table import AttendanceTableError, build_period_table, patch_daily_cell
+from app.services.attendance_period_table import AttendanceTableError, build_period_table
 from app.services.attendance_upload_service import AttendanceUploadError, handle_attendance_upload
-from app.services.export import PeriodExportError, generate_period_excel, generate_period_pdf
+from app.services.export import PeriodExportError, generate_period_excel
 from app.services.excel_download import stream_file_chunks
 
 logger = logging.getLogger(__name__)
@@ -108,28 +105,6 @@ def get_attendance_period_table(
     return AttendancePeriodTableResponse(**payload)
 
 
-@router.patch("/daily/{daily_id}", response_model=DailyAttendancePatchResponse)
-def patch_daily_attendance_cell(
-    daily_id: int,
-    body: DailyAttendancePatchRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(HR_ROLES)),
-):
-    """Update a single morning/afternoon cell and return recalculated totals."""
-    try:
-        result = patch_daily_cell(
-            db,
-            daily_id=daily_id,
-            company_id=current_user.company_id,
-            shift=body.shift,
-            status=body.status,
-            user=current_user,
-        )
-    except AttendanceTableError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    return DailyAttendancePatchResponse(**result)
-
-
 @router.get("/period/{period_id}/export/excel")
 def export_period_excel(
     period_id: int,
@@ -169,45 +144,5 @@ def export_period_excel(
         headers={
             "Content-Disposition": f'attachment; filename="{export_result.filename}"',
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        },
-    )
-
-
-@router.get("/period/{period_id}/export/pdf")
-def export_period_pdf(
-    period_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(HR_ROLES)),
-):
-    """Download attendance + exception report for a period (.pdf, landscape)."""
-    try:
-        export_result = generate_period_pdf(db, period_id, current_user.company_id)
-    except PeriodExportError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    except Exception as exc:
-        logger.exception(
-            "Period PDF export failed: user_id=%s period_id=%s",
-            current_user.id,
-            period_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate PDF export",
-        ) from exc
-
-    logger.info(
-        "Period PDF export started: user_id=%s period_id=%s employees=%s exceptions=%s",
-        current_user.id,
-        period_id,
-        export_result.employee_count,
-        export_result.exception_count,
-    )
-
-    return StreamingResponse(
-        BytesIO(export_result.content),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{export_result.filename}"',
-            "Content-Type": "application/pdf",
         },
     )

@@ -16,7 +16,9 @@ export interface AttendancePeriodSummary {
   created_at: string;
   updated_at: string;
   confirmed_at?: string | null;
+  confirmed_by_name?: string | null;
   archived_at?: string | null;
+  archived_by_name?: string | null;
   source_filename?: string | null;
 }
 
@@ -42,12 +44,25 @@ export async function fetchAttendancePeriod(periodId: number): Promise<Attendanc
 }
 
 export async function fetchAttendancePeriods(
-  status?: PeriodDisplayStatus
+  status?: PeriodDisplayStatus,
+  filters?: { year?: number; month?: number }
 ): Promise<AttendancePeriodListResponse> {
   const { data } = await client.get<AttendancePeriodListResponse>("/attendance/periods", {
-    params: status ? { status } : undefined,
+    params: {
+      ...(status ? { status } : {}),
+      ...(filters?.year ? { year: filters.year } : {}),
+      ...(filters?.month ? { month: filters.month } : {}),
+    },
   });
   return data;
+}
+
+export async function fetchAttendancePeriodForMonth(
+  year: number,
+  month: number
+): Promise<AttendancePeriodSummary | null> {
+  const response = await fetchAttendancePeriods(undefined, { year, month });
+  return response.periods[0] ?? null;
 }
 
 export async function confirmAttendancePeriod(periodId: number): Promise<AttendancePeriodSummary> {

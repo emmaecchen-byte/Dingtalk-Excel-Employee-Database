@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.excel.template_generator import TemplateEmployee
 from app.models import Employee, User
-from app.services.attendance_rule_engine import load_company_rules
+from app.services.attendance_rule_engine import build_anomaly_keywords, load_company_rules
 from app.services.excel_generator import (
     ExcelExportResult,
     load_workbook_from_template,
@@ -76,15 +76,20 @@ def _has_keyword(value: str, keywords: Sequence[str]) -> bool:
     return any(keyword in value for keyword in keywords)
 
 
-def detect_anomalies_in_status(status_text: str) -> ConverterAnomalyCounts:
+def detect_anomalies_in_status(
+    status_text: str,
+    *,
+    anomaly_keywords: Optional[dict[str, tuple[str, ...]]] = None,
+) -> ConverterAnomalyCounts:
     """Detect 旷工 / 迟到 / 缺卡 in a single day's DingTalk status text."""
     text = (status_text or "").strip()
     if not text:
         return ConverterAnomalyCounts()
+    keywords = anomaly_keywords or ANOMALY_KEYWORDS
     return ConverterAnomalyCounts(
-        absenteeism=1 if _has_keyword(text, ANOMALY_KEYWORDS["absenteeism"]) else 0,
-        lateness=1 if _has_keyword(text, ANOMALY_KEYWORDS["lateness"]) else 0,
-        missing_punch=1 if _has_keyword(text, ANOMALY_KEYWORDS["missing_punch"]) else 0,
+        absenteeism=1 if _has_keyword(text, keywords["absenteeism"]) else 0,
+        lateness=1 if _has_keyword(text, keywords["lateness"]) else 0,
+        missing_punch=1 if _has_keyword(text, keywords["missing_punch"]) else 0,
     )
 
 
@@ -93,6 +98,7 @@ def aggregate_monthly_anomalies(
     *,
     year: int,
     month: int,
+    anomaly_keywords: Optional[dict[str, tuple[str, ...]]] = None,
 ) -> Tuple[ConverterAnomalyCounts, int]:
     """Sum anomaly counts across all days in the month; return attendance-day count."""
     days_in_month = calendar.monthrange(year, month)[1]
@@ -103,7 +109,7 @@ def aggregate_monthly_anomalies(
         value = (daily_status.get(f"day_{day}") or "").strip()
         if not value:
             continue
-        day_anomalies = detect_anomalies_in_status(value)
+        day_anomalies = detect_anomalies_in_status(value, anomaly_keywords=anomaly_keywords)
         totals.absenteeism += day_anomalies.absenteeism
         totals.lateness += day_anomalies.lateness
         totals.missing_punch += day_anomalies.missing_punch
@@ -139,6 +145,7 @@ def _build_converter_records(
     *,
     year: int,
     month: int,
+    anomaly_keywords: Optional[dict[str, tuple[str, ...]]] = None,
 ) -> List[SimpleNamespace]:
     records: List[SimpleNamespace] = []
 
@@ -154,6 +161,7 @@ def _build_converter_records(
             row.daily_status,
             year=year,
             month=month,
+            anomaly_keywords=anomaly_keywords,
         )
         record = SimpleNamespace(
             employee=employee_payload,
@@ -238,6 +246,9 @@ async def convert_dingtalk_upload_to_workbook(
 
         resolved_year, resolved_month = _resolve_period(parsed, year=year, month=month)
 
+        rules = load_company_rules(db, user.company_id)
+        anomaly_keywords = build_anomaly_keywords(rules)
+
         employees = (
             db.query(Employee)
             .filter(
@@ -252,11 +263,11 @@ async def convert_dingtalk_upload_to_workbook(
             employees_by_name,
             year=resolved_year,
             month=resolved_month,
+            anomaly_keywords=anomaly_keywords,
         )
         if not records:
             raise ExcelConverterError("No employee rows found in uploaded 月度汇总")
 
-        rules = load_company_rules(db, user.company_id)
         template_employees = [
             TemplateEmployee(
                 name=record.employee.name,

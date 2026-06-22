@@ -51,15 +51,8 @@ class CRUDEmployeeAttendance(CRUDBase[EmployeeAttendance]):
         )
 
 
-class CRUDDailyAttendance(CRUDBase[DailyAttendance]):
-    def bulk_create(self, db: Session, records: List[DailyAttendance]) -> None:
-        db.add_all(records)
-        db.flush()
-
-
 attendance_period = CRUDAttendancePeriod(AttendancePeriod)
 employee_attendance = CRUDEmployeeAttendance(EmployeeAttendance)
-daily_attendance = CRUDDailyAttendance(DailyAttendance)
 
 
 def match_employee_by_name(db: Session, company_id: int, employee_name: str) -> Optional[Employee]:

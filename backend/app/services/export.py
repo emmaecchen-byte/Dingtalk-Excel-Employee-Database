@@ -2,7 +2,7 @@
 Export attendance period data to Excel and PDF (spec section 6.6).
 
 Excel: 2-sheet workbook (签字 + 情况说明) with formulas.
-PDF: landscape report with attendance grid and exception table.
+PDF: see ``app.services.pdf_export`` (landscape attendance grid + exception table).
 """
 
 from __future__ import annotations
@@ -19,19 +19,12 @@ from typing import List, Optional, Sequence
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.orm import Session, joinedload
 
 from app.crud.abnormal_record import abnormal_record
 from app.excel.template_generator import (
     BODY_FONT,
     CENTER,
-    COMPANY_NAME,
     HEADER_FILL,
     HEADER_FONT,
     SIGN_ABSENT_COL,
@@ -45,25 +38,13 @@ from app.excel.template_generator import (
     _apply_border_range,
     count_month_work_days,
     is_calendar_weekend,
-    monthly_day_header_label,
     write_sign_sheet_employee_am_pm_summary_formulas,
     write_sign_sheet_headers,
     write_sign_sheet_legend,
 )
-from app.models import AbnormalRecord, AttendancePeriod, Company, EmployeeAttendance
-from app.services.attendance_period_table import compute_row_totals
+from app.models import AbnormalRecord, AttendancePeriod, EmployeeAttendance
 from app.services.attendance_rule_engine import load_company_rules
 from app.services.exception_detection import EXCEPTION_LABELS
-from app.services.pdf_generator import (
-    BRAND_BLUE,
-    BRAND_BORDER,
-    BRAND_LIGHT,
-    BRAND_MUTED,
-    BRAND_NAVY,
-    FONT_NAME,
-    _make_page_footer,
-    _styles,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -366,330 +347,6 @@ def generate_period_excel(
 
     return PeriodExcelExportResult(
         path=path,
-        filename=filename,
-        period_id=period_id,
-        year=period.year,
-        month=period.month,
-        employee_count=len(employees),
-        exception_count=len(exceptions),
-    )
-
-
-# ---------------------------------------------------------------------------
-# PDF export (ReportLab, landscape)
-# ---------------------------------------------------------------------------
-
-PDF_DAY_COL_WIDTH = 5.2 * mm
-PDF_NAME_COL_WIDTH = 12 * mm
-PDF_SHIFT_COL_WIDTH = 7 * mm
-PDF_TOTAL_COL_WIDTH = 7 * mm
-WEEKEND_FILL_COLOR = colors.HexColor("#f0f0f0")
-
-
-@dataclass
-class PeriodPdfExportResult:
-    content: bytes
-    filename: str
-    period_id: int
-    year: int
-    month: int
-    employee_count: int
-    exception_count: int
-
-
-def _resolve_company_name(db: Session, company_id: int) -> str:
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if company and company.name and company.name not in {"Demo Company", "demo"}:
-        return company.name
-    return COMPANY_NAME
-
-
-def _pdf_cell_styles(base_styles: dict) -> dict:
-    return {
-        **base_styles,
-        "tiny": ParagraphStyle(
-            "pdf_tiny",
-            parent=base_styles["body"],
-            fontSize=5,
-            leading=6,
-            alignment=TA_CENTER,
-        ),
-        "cell": ParagraphStyle(
-            "pdf_cell",
-            parent=base_styles["body"],
-            fontSize=6,
-            leading=7,
-            alignment=TA_CENTER,
-        ),
-        "header": ParagraphStyle(
-            "pdf_header",
-            parent=base_styles["muted"],
-            fontSize=6,
-            leading=7,
-            alignment=TA_CENTER,
-            textColor=colors.white,
-        ),
-        "title": ParagraphStyle(
-            "pdf_title",
-            parent=base_styles["title"],
-            fontSize=16,
-            leading=20,
-        ),
-        "subtitle": ParagraphStyle(
-            "pdf_subtitle",
-            parent=base_styles["subtitle"],
-            fontSize=10,
-            leading=13,
-        ),
-    }
-
-
-def _period_pdf_banner(
-    company_name: str,
-    year: int,
-    month: int,
-    generated_at: datetime,
-    styles: dict,
-) -> Table:
-    period_label = f"{year}年{month:02d}月 考勤报表"
-    generated_label = f"生成时间：{generated_at.strftime('%Y-%m-%d %H:%M')}"
-    page_width = landscape(A4)[0] - 28 * mm
-    data = [
-        [Paragraph(company_name, styles["title"])],
-        [Paragraph(period_label, styles["subtitle"])],
-        [Paragraph(generated_label, styles["subtitle"])],
-    ]
-    table = Table(data, colWidths=[page_width])
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), BRAND_NAVY),
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-                ("TOPPADDING", (0, 0), (-1, 0), 10),
-                ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
-            ]
-        )
-    )
-    return table
-
-
-def _attendance_pdf_col_widths(days_in_month: int) -> List[float]:
-    widths = [PDF_NAME_COL_WIDTH, PDF_SHIFT_COL_WIDTH]
-    widths.extend([PDF_DAY_COL_WIDTH] * days_in_month)
-    widths.extend([PDF_TOTAL_COL_WIDTH] * 4)
-    return widths
-
-
-def _build_attendance_pdf_table(
-    employees: Sequence[EmployeeAttendance],
-    *,
-    year: int,
-    month: int,
-    styles: dict,
-    rules,
-) -> Table:
-    days_in_month = calendar.monthrange(year, month)[1]
-    day_headers = [monthly_day_header_label(year, month, day) for day in range(1, days_in_month + 1)]
-    summary_headers = ["出勤", "旷工", "迟到", "缺卡"]
-    header_labels = ["姓名", "班次"] + day_headers + summary_headers
-    data: List[List] = [[Paragraph(label, styles["header"]) for label in header_labels]]
-
-    for employee_row in employees:
-        daily_by_day = {item.day: item for item in employee_row.daily_records}
-        name = employee_row.employee_name or ""
-        for shift, shift_label in (("morning", "上午"), ("afternoon", "下午")):
-            row: List = [
-                Paragraph(name, styles["cell"]),
-                Paragraph(shift_label, styles["cell"]),
-            ]
-            for day in range(1, days_in_month + 1):
-                record = daily_by_day.get(day)
-                if shift == "morning":
-                    symbol = _half_day_symbol(record.morning_status if record else None, rules)
-                else:
-                    symbol = _half_day_symbol(record.afternoon_status if record else None, rules)
-                row.append(Paragraph(symbol or "·", styles["tiny"]))
-            totals = compute_row_totals(
-                daily_by_day,
-                year=year,
-                month=month,
-                shift=shift,
-                rules=rules,
-            )
-            row.extend(
-                [
-                    Paragraph(str(totals["present"]), styles["cell"]),
-                    Paragraph(str(totals["absenteeism"]), styles["cell"]),
-                    Paragraph(str(totals["lateness"]), styles["cell"]),
-                    Paragraph(str(totals["missing_punch"]), styles["cell"]),
-                ]
-            )
-            data.append(row)
-
-    table = Table(data, colWidths=_attendance_pdf_col_widths(days_in_month), repeatRows=1)
-    style_commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), BRAND_NAVY),
-        ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
-        ("FONTSIZE", (0, 0), (-1, -1), 6),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.25, BRAND_BORDER),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ("LEFTPADDING", (0, 0), (-1, -1), 1),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 1),
-    ]
-    day_col_start = 2
-    for day in range(1, days_in_month + 1):
-        if is_calendar_weekend(year, month, day):
-            col = day_col_start + day - 1
-            style_commands.append(("BACKGROUND", (col, 0), (col, -1), WEEKEND_FILL_COLOR))
-    summary_start = day_col_start + days_in_month
-    style_commands.append(("BACKGROUND", (summary_start, 0), (-1, 0), BRAND_BLUE))
-    table.setStyle(TableStyle(style_commands))
-    return table
-
-
-def _build_exception_pdf_table(
-    records: Sequence[AbnormalRecord],
-    styles: dict,
-) -> Table:
-    headers = list(SITUATION_HEADERS)
-    data: List[List] = [[Paragraph(h, styles["header"]) for h in headers]]
-    if not records:
-        data.append(
-            [
-                Paragraph("本月无异常记录", styles["body"]),
-                Paragraph("", styles["body"]),
-                Paragraph("", styles["body"]),
-                Paragraph("", styles["body"]),
-                Paragraph("", styles["body"]),
-            ]
-        )
-    else:
-        for record in records:
-            data.append(
-                [
-                    Paragraph(record.employee_name, styles["cell"]),
-                    Paragraph(_format_dates_column(record) or record.summary, styles["cell"]),
-                    Paragraph(
-                        record.summary
-                        or EXCEPTION_LABELS.get(record.exception_type, record.exception_type),
-                        ParagraphStyle(
-                            "exc_detail",
-                            parent=styles["body"],
-                            fontSize=6,
-                            leading=8,
-                            alignment=TA_LEFT,
-                        ),
-                    ),
-                    Paragraph(_supplement_label(record.supplement_status), styles["cell"]),
-                    Paragraph(
-                        record.notes or "",
-                        ParagraphStyle(
-                            "exc_notes",
-                            parent=styles["body"],
-                            fontSize=6,
-                            leading=8,
-                            alignment=TA_LEFT,
-                        ),
-                    ),
-                ]
-            )
-
-    page_width = landscape(A4)[0] - 28 * mm
-    col_widths = [18 * mm, 28 * mm, 62 * mm, 18 * mm, page_width - 126 * mm]
-    table = Table(data, colWidths=col_widths, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), BRAND_NAVY),
-                ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
-                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                ("ALIGN", (2, 1), (2, -1), "LEFT"),
-                ("ALIGN", (4, 1), (4, -1), "LEFT"),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("GRID", (0, 0), (-1, -1), 0.25, BRAND_BORDER),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BRAND_LIGHT]),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    return table
-
-
-def generate_period_pdf(
-    db: Session,
-    period_id: int,
-    company_id: int,
-) -> PeriodPdfExportResult:
-    period = _load_period(db, period_id, company_id)
-    employees = _load_employees(db, period_id)
-    if not employees:
-        raise PeriodExportError("No attendance data found for this period", status_code=404)
-
-    exceptions = abnormal_record.list_for_period(
-        db,
-        period_id=period_id,
-        company_id=company_id,
-    )
-
-    rules = load_company_rules(db, company_id)
-    generated_at = datetime.utcnow()
-    company_name = _resolve_company_name(db, company_id)
-    base_styles = _styles()
-    styles = _pdf_cell_styles(base_styles)
-
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=landscape(A4),
-        leftMargin=14 * mm,
-        rightMargin=14 * mm,
-        topMargin=10 * mm,
-        bottomMargin=16 * mm,
-        title=f"Attendance Period {period.year}-{period.month:02d}",
-        author="DingTalk Attendance System",
-    )
-
-    page_footer = _make_page_footer(generated_at)
-    story: List = [
-        _period_pdf_banner(company_name, period.year, period.month, generated_at, styles),
-        Spacer(1, 5 * mm),
-        Paragraph("考勤签字表", base_styles["section"]),
-        Spacer(1, 2 * mm),
-        _build_attendance_pdf_table(
-            employees, year=period.year, month=period.month, styles=styles, rules=rules
-        ),
-        PageBreak(),
-        _period_pdf_banner(company_name, period.year, period.month, generated_at, styles),
-        Spacer(1, 5 * mm),
-        Paragraph("情况说明 / 异常处理", base_styles["section"]),
-        Spacer(1, 2 * mm),
-        _build_exception_pdf_table(exceptions, styles),
-    ]
-
-    doc.build(story, onFirstPage=page_footer, onLaterPages=page_footer)
-    content = buffer.getvalue()
-    buffer.close()
-
-    filename = f"attendance_period_{period.year}_{period.month:02d}_{period_id}.pdf"
-    logger.info(
-        "Period PDF export generated period_id=%s company_id=%s employees=%s exceptions=%s bytes=%s",
-        period_id,
-        company_id,
-        len(employees),
-        len(exceptions),
-        len(content),
-    )
-
-    return PeriodPdfExportResult(
-        content=content,
         filename=filename,
         period_id=period_id,
         year=period.year,

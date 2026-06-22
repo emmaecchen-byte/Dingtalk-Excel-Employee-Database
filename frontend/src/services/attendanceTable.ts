@@ -70,6 +70,10 @@ export interface DailyAttendancePatchResponse {
   shift: string;
   status: string;
   symbol: string;
+  morning_status: string;
+  afternoon_status: string;
+  morning_symbol: string;
+  afternoon_symbol: string;
   raw_text: string;
   requires_review: boolean;
   employee_attendance_id: number;
@@ -138,4 +142,65 @@ export function flattenEmployeesToGridRows(
     });
   }
   return rows;
+}
+
+export function applyDailyPatch(
+  data: AttendancePeriodTableResponse,
+  patch: DailyAttendancePatchResponse
+): AttendancePeriodTableResponse {
+  return {
+    ...data,
+    employees: data.employees.map((employee) => {
+      if (employee.employee_attendance_id !== patch.employee_attendance_id) {
+        return employee;
+      }
+      return {
+        ...employee,
+        requires_review: patch.employee_requires_review,
+        totals: patch.employee_totals,
+        rows: employee.rows.map((shiftRow) => ({
+          ...shiftRow,
+          totals: shiftRow.shift === patch.shift ? patch.row_totals : shiftRow.totals,
+          days: shiftRow.days.map((dayCell) => {
+            if (dayCell.daily_id !== patch.daily_id) {
+              return dayCell;
+            }
+            const status =
+              shiftRow.shift === "morning" ? patch.morning_status : patch.afternoon_status;
+            const symbol =
+              shiftRow.shift === "morning" ? patch.morning_symbol : patch.afternoon_symbol;
+            return {
+              ...dayCell,
+              status,
+              symbol,
+              raw_text: patch.raw_text,
+              requires_review: patch.requires_review,
+            };
+          }),
+        })),
+      };
+    }),
+  };
+}
+
+export function formatStatusOptionLabel(option: AttendanceStatusOption): string {
+  if (option.value === "产假") {
+    return option.symbol ? `产假/陪产假(${option.symbol})` : "产假/陪产假";
+  }
+  if (option.symbol) {
+    return `${option.value}(${option.symbol})`;
+  }
+  return option.value;
+}
+
+export function isWeekendDay(year: number, month: number, day: number): boolean {
+  const weekday = new Date(year, month - 1, day).getDay();
+  return weekday === 0 || weekday === 6;
+}
+
+export function dayHeaderLabel(year: number, month: number, day: number): string {
+  const weekday = new Date(year, month - 1, day).getDay();
+  if (weekday === 6) return "六";
+  if (weekday === 0) return "日";
+  return String(day);
 }

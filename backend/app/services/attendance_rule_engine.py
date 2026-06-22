@@ -7,7 +7,10 @@ Higher ``priority`` wins when multiple keywords match the same raw text.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
+from threading import Lock
 from typing import Iterable, List, Optional, Sequence
 
 from sqlalchemy.orm import Session
@@ -15,7 +18,14 @@ from sqlalchemy.orm import Session
 from app.crud.attendance_rule import attendance_rule
 from app.models import AttendanceRule
 
+logger = logging.getLogger(__name__)
+
+RULE_CACHE_TTL_SECONDS = 60
+
 LEGACY_SYMBOLS = frozenset({"√", "◇", "✬", "▼", "※", "●", "AL", "○", "FL", "ML", "旷工", "迟到", "缺卡"})
+
+_rule_cache: dict[int, tuple[float, List["ResolvedAttendanceRule"]]] = {}
+_cache_lock = Lock()
 
 DEFAULT_RULE_DEFINITIONS: List[dict] = [
     {
@@ -69,6 +79,16 @@ DEFAULT_RULE_DEFINITIONS: List[dict] = [
         "priority": 85,
     },
     {
+        "raw_keyword": "上班迟到",
+        "normalized_status": "迟到",
+        "symbol": "迟到",
+        "counts_as_attendance": True,
+        "counts_as_meal_allowance": False,
+        "leave_type": None,
+        "is_abnormal": True,
+        "priority": 87,
+    },
+    {
         "raw_keyword": "严重迟到",
         "normalized_status": "迟到",
         "symbol": "迟到",
@@ -87,6 +107,36 @@ DEFAULT_RULE_DEFINITIONS: List[dict] = [
         "leave_type": None,
         "is_abnormal": True,
         "priority": 84,
+    },
+    {
+        "raw_keyword": "上班缺卡",
+        "normalized_status": "缺卡",
+        "symbol": "缺卡",
+        "counts_as_attendance": False,
+        "counts_as_meal_allowance": False,
+        "leave_type": None,
+        "is_abnormal": True,
+        "priority": 85,
+    },
+    {
+        "raw_keyword": "早退",
+        "normalized_status": "早退",
+        "symbol": "早退",
+        "counts_as_attendance": False,
+        "counts_as_meal_allowance": False,
+        "leave_type": None,
+        "is_abnormal": True,
+        "priority": 82,
+    },
+    {
+        "raw_keyword": "上班早退",
+        "normalized_status": "早退",
+        "symbol": "早退",
+        "counts_as_attendance": False,
+        "counts_as_meal_allowance": False,
+        "leave_type": None,
+        "is_abnormal": True,
+        "priority": 83,
     },
     {
         "raw_keyword": "未打卡",
@@ -263,27 +313,81 @@ def default_rules() -> List[ResolvedAttendanceRule]:
     return [ResolvedAttendanceRule.from_dict(item) for item in DEFAULT_RULE_DEFINITIONS]
 
 
+def invalidate_company_rules_cache(company_id: int) -> None:
+    with _cache_lock:
+        _rule_cache.pop(company_id, None)
+
+
+def invalidate_all_rules_cache() -> None:
+    with _cache_lock:
+        _rule_cache.clear()
+
+
 def ensure_default_rules(db: Session, company_id: int) -> List[AttendanceRule]:
     existing = attendance_rule.list_for_company(db, company_id)
-    if existing:
-        return existing
+    existing_keywords = {rule.raw_keyword for rule in existing}
 
     created: List[AttendanceRule] = []
     for item in DEFAULT_RULE_DEFINITIONS:
+        if item["raw_keyword"] in existing_keywords:
+            continue
         rule = AttendanceRule(company_id=company_id, **item)
         db.add(rule)
         created.append(rule)
-    db.commit()
-    for rule in created:
-        db.refresh(rule)
+
+    if created:
+        db.commit()
+        for rule in created:
+            db.refresh(rule)
+        invalidate_company_rules_cache(company_id)
+        logger.info("Seeded %s default attendance rules for company_id=%s", len(created), company_id)
+
+    if existing:
+        return existing + created
     return created
 
 
 def load_company_rules(db: Session, company_id: int) -> List[ResolvedAttendanceRule]:
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _rule_cache.get(company_id)
+        if cached and now - cached[0] < RULE_CACHE_TTL_SECONDS:
+            return list(cached[1])
+
+    ensure_default_rules(db, company_id)
     rows = attendance_rule.list_for_company(db, company_id)
-    if not rows:
-        rows = ensure_default_rules(db, company_id)
-    return [ResolvedAttendanceRule.from_model(rule) for rule in rows]
+    resolved = [ResolvedAttendanceRule.from_model(rule) for rule in rows]
+
+    with _cache_lock:
+        _rule_cache[company_id] = (now, resolved)
+    return resolved
+
+
+def build_anomaly_keywords(rules: Sequence[ResolvedAttendanceRule]) -> dict[str, tuple[str, ...]]:
+    """Build keyword tuples for anomaly detection from configured rules."""
+    absenteeism: List[str] = []
+    lateness: List[str] = []
+    missing_punch: List[str] = []
+    early_departure: List[str] = []
+
+    for rule in rules:
+        if not rule.is_abnormal:
+            continue
+        if rule.normalized_status == "旷工":
+            absenteeism.append(rule.raw_keyword)
+        elif rule.normalized_status == "迟到":
+            lateness.append(rule.raw_keyword)
+        elif rule.normalized_status == "缺卡":
+            missing_punch.append(rule.raw_keyword)
+        elif rule.normalized_status == "早退":
+            early_departure.append(rule.raw_keyword)
+
+    return {
+        "absenteeism": tuple(absenteeism or ("旷工",)),
+        "lateness": tuple(lateness or ("迟到", "上班迟到")),
+        "missing_punch": tuple(missing_punch or ("缺卡", "上班缺卡", "未打卡")),
+        "early_departure": tuple(early_departure or ("早退", "上班早退")),
+    }
 
 
 def match_rule(text: str, rules: Sequence[ResolvedAttendanceRule]) -> Optional[ResolvedAttendanceRule]:

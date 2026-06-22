@@ -205,6 +205,19 @@ export default function AttendanceListPage() {
       render: (value: string) => formatDateTime(value),
     },
     {
+      title: "归档信息",
+      width: 180,
+      render: (_, record) =>
+        record.display_status === "archived" ? (
+          <Space direction="vertical" size={0}>
+            <Text type="secondary">{formatDateTime(record.archived_at)}</Text>
+            {record.archived_by_name && <Text type="secondary">by {record.archived_by_name}</Text>}
+          </Space>
+        ) : (
+          "—"
+        ),
+    },
+    {
       title: "操作",
       fixed: "right",
       width: 280,

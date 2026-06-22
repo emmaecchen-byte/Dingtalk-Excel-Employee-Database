@@ -30,7 +30,7 @@ from app.services.period_workflow import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/attendance", tags=["attendance-periods"])
+router = APIRouter(tags=["attendance-periods"])
 
 HR_ROLES = ["hr_admin", "hr_viewer"]
 HR_ADMIN_ROLES = ["hr_admin"]
@@ -53,11 +53,19 @@ def get_attendance_period(
 @router.get("/periods", response_model=AttendancePeriodListResponse)
 def list_attendance_periods(
     status: Optional[str] = Query(None, description="Filter by display status: draft, confirmed, archived"),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(HR_ROLES)),
 ):
     """List processed attendance months for the company."""
-    periods = list_company_periods(db, current_user.company_id, status=status)
+    periods = list_company_periods(
+        db,
+        current_user.company_id,
+        status=status,
+        year=year,
+        month=month,
+    )
     return AttendancePeriodListResponse(
         total=len(periods),
         periods=[AttendancePeriodSummary(**item) for item in periods],
