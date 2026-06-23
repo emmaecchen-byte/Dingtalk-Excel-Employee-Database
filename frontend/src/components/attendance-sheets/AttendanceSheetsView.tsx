@@ -70,7 +70,8 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
   const daysInMonth = useMemo(() => new Date(year, month, 0).getDate(), [year, month]);
 
   return (
-    <table className="signature-sheet">
+    <div className="signature-sheet-scroll">
+      <table className="signature-sheet">
       <colgroup>
         <col className="sign-name-col" />
         <col className="sign-info-col" />
@@ -82,8 +83,8 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
         ))}
       </colgroup>
       <thead>
-        <tr>
-          <th colSpan={2} className="header-title">
+        <tr className="sign-head-row-title">
+          <th colSpan={2} className="header-title sign-sticky-corner">
             {companyName}员工{year}年{month}月考勤表
           </th>
           <th colSpan={31} className="header-title" />
@@ -91,9 +92,9 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
             缺勤统计
           </th>
         </tr>
-        <tr>
-          <th>姓名</th>
-          <th>时间</th>
+        <tr className="sign-head-row-columns">
+          <th className="sign-sticky-name">姓名</th>
+          <th className="sign-sticky-time">时间</th>
           {Array.from({ length: 31 }, (_, index) => {
             const day = index + 1;
             const outOfMonth = day > daysInMonth;
@@ -114,8 +115,8 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
             <th key={label}>{label}</th>
           ))}
         </tr>
-        <tr className="sign-legend-row">
-          <th colSpan={2} />
+        <tr className="sign-legend-row sign-head-row-legend">
+          <th colSpan={2} className="sign-sticky-corner" />
           {Array.from({ length: 31 }, (_, index) => {
             const day = index + 1;
             const outOfMonth = day > daysInMonth;
@@ -138,11 +139,11 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
       <tbody>
         {employees.map((employee) => (
           <Fragment key={employee.id}>
-            <tr>
-              <td rowSpan={2} className="employee-name">
+            <tr className="sign-employee-block-start">
+              <td rowSpan={2} className="employee-name sign-employee-name sign-sticky-name">
                 {employee.name}
               </td>
-              <td className="time-slot">上午</td>
+              <td className="time-slot sign-sticky-time">上午</td>
               {employee.morning.map((value, index) => (
                 <SignStatusCell
                   key={`${employee.id}-am-${index}`}
@@ -155,13 +156,15 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
                 />
               ))}
               {SIGN_COUNT_SYMBOLS.map((symbol) => (
-                <td key={`${employee.id}-count-${symbol}`}>{employee.sign_counts[symbol] ?? 0}</td>
+                <td key={`${employee.id}-count-${symbol}`} rowSpan={2}>
+                  {employee.sign_counts[symbol] ?? 0}
+                </td>
               ))}
               <td rowSpan={2}>{employee.sign_meal_total ?? 0}</td>
               <td rowSpan={2}>{employee.absent_days}</td>
             </tr>
             <tr>
-              <td className="time-slot">下午</td>
+              <td className="time-slot sign-sticky-time">下午</td>
               {employee.afternoon.map((value, index) => (
                 <SignStatusCell
                   key={`${employee.id}-pm-${index}`}
@@ -178,6 +181,7 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

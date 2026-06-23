@@ -24,17 +24,17 @@ COMPANY_NAME = "创崎新能源技术（上海）有限公司"
 
 TEMPLATE_SHEETS = ("签字", "情况说明", "月度汇总", "加班结算加班工资")
 
-# 签字 sheet layout (matches spec: title / spacer / headers / spacer / legend / data)
+# 签字 sheet layout (title / spacer / headers / legend / data)
 SIGN_TITLE_ROW = 1
 SIGN_SPACER_ROW_1 = 2
 SIGN_HEADER_ROW = 3
-SIGN_SPACER_ROW_2 = 4
-SIGN_LEGEND_ROW = 5
-SIGN_DATA_START_ROW = 6
+SIGN_LEGEND_ROW = 4
+SIGN_DATA_START_ROW = 5
 
 SIGN_NAME_COL = 1  # A = 姓名
 SIGN_TIME_COL = 2  # B = 时间
 SIGN_DAY_START_COL = 3  # C = day 1
+SIGN_FREEZE_COL = SIGN_DAY_START_COL  # freeze columns A–B; scroll starts at day columns
 SIGN_DAY_END_COL = 33  # AG = day 31
 SIGN_DAY_COUNT = 31
 SIGN_DAY_COL_WIDTH = 8  # wide enough for 3-line 迟到 cells without stretching rows
@@ -45,9 +45,9 @@ SIGN_SUMMARY_START_COL = 35  # AI
 SIGN_SUMMARY_END_COL = 44  # AR — last symbol COUNTIF column (婚假 / ML)
 SIGN_MEAL_TOTAL_COL = 45  # AS — 出勤合计 (√ + ▼)
 SIGN_ABSENT_COL = 46  # AT — 合计 (应出勤 − 出勤)
-SIGN_LEGEND_ML_COL = 44  # AR5 — ML (婚假) legend symbol
+SIGN_LEGEND_ML_COL = 44  # AR4 — ML (婚假) legend symbol
 
-# Legend symbols in AI5–AR5 (symbol only in cell; label in row 3 header)
+# Legend symbols in AI4–AR4 (symbol only in cell; label in row 3 header)
 SIGN_LEGEND_SYMBOLS: Tuple[Tuple[str, str], ...] = (
     ("√", "出勤"),
     ("◇", "事假"),
@@ -410,11 +410,11 @@ def _merge_title(ws, row: int, min_col: int, max_col: int, text: str) -> None:
 
 
 def sign_countif_formula(data_row: int, legend_col_index: int) -> str:
-    """COUNTIF for one summary column (AJ=0 … AR=8), referencing row 5 legend."""
+    """COUNTIF for one summary column (AI=0 … AR=9), referencing the legend row."""
     day_start = _day_col_sign(1)
     day_end = _day_col_sign(SIGN_DAY_COUNT)
     legend_col = _summary_col_sign(legend_col_index)
-    return f"=COUNTIF({day_start}{data_row}:{day_end}{data_row},${legend_col}$5)"
+    return f"=COUNTIF({day_start}{data_row}:{day_end}{data_row},${legend_col}${SIGN_LEGEND_ROW})"
 
 
 def sign_meal_total_formula(data_row: int) -> str:
@@ -464,9 +464,9 @@ def write_sign_sheet_employee_am_pm_summary_formulas(
     *,
     work_days: int,
 ) -> None:
-    """Write COUNTIF and absent formulas on both 上午 and 下午 rows for one employee."""
-    for row in (am_row, pm_row):
-        write_sign_sheet_employee_summary_formulas(ws, row, work_days=work_days)
+    """Write COUNTIF and totals on the 上午 row, merged across both rows."""
+    write_sign_sheet_employee_summary_formulas(ws, am_row, work_days=work_days)
+    merge_sign_employee_summary_columns(ws, am_row, pm_row)
 
 
 def write_sign_sheet_summary_formulas(
@@ -924,7 +924,7 @@ def sign_legend_cell_text(symbol: str, label: str) -> str:
 
 
 def write_sign_sheet_legend(ws) -> None:
-    """Write symbol legend to AI5–AR5 (ML in AR5)."""
+    """Write symbol legend to AI4–AR4 (ML in AR4)."""
     for idx, (symbol, _label) in enumerate(SIGN_LEGEND_SYMBOLS):
         col = SIGN_SUMMARY_START_COL + idx
         cell = ws.cell(row=SIGN_LEGEND_ROW, column=col, value=symbol)
@@ -933,8 +933,79 @@ def write_sign_sheet_legend(ws) -> None:
         cell.fill = HEADER_FILL
 
 
+def _unmerge_cells_in_range(
+    ws,
+    min_row: int,
+    max_row: int,
+    min_col: int,
+    max_col: int,
+) -> None:
+    for merged in list(ws.merged_cells.ranges):
+        if (
+            merged.min_row <= max_row
+            and merged.max_row >= min_row
+            and merged.min_col <= max_col
+            and merged.max_col >= min_col
+        ):
+            ws.unmerge_cells(str(merged))
+
+
+def prepare_sign_employee_rows(ws, am_row: int, pm_row: int, name: str) -> None:
+    """Set merged 姓名 and 上午/下午 labels for one employee block."""
+    _unmerge_cells_in_range(ws, am_row, pm_row, SIGN_NAME_COL, SIGN_ABSENT_COL)
+
+    name_cell = ws.cell(row=am_row, column=SIGN_NAME_COL, value=name or None)
+    name_cell.font = BODY_FONT
+    name_cell.alignment = CENTER
+    ws.merge_cells(
+        start_row=am_row,
+        start_column=SIGN_NAME_COL,
+        end_row=pm_row,
+        end_column=SIGN_NAME_COL,
+    )
+
+    ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午").alignment = CENTER
+    ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午").alignment = CENTER
+
+
+def merge_sign_employee_summary_columns(ws, am_row: int, pm_row: int) -> None:
+    """Merge COUNTIF / total columns vertically for one employee."""
+    for col in range(SIGN_SUMMARY_START_COL, SIGN_ABSENT_COL + 1):
+        cell = ws.cell(row=am_row, column=col)
+        cell.alignment = CENTER
+        ws.merge_cells(
+            start_row=am_row,
+            start_column=col,
+            end_row=pm_row,
+            end_column=col,
+        )
+
+
+def apply_sign_employee_separator_border(ws, am_row: int) -> None:
+    """Draw a thicker top border between employee blocks."""
+    if am_row <= SIGN_DATA_START_ROW:
+        return
+    medium_top = Side(style="medium", color="000000")
+    for col in range(1, SIGN_ABSENT_COL + 1):
+        cell = ws.cell(row=am_row, column=col)
+        border = cell.border
+        cell.border = Border(
+            top=medium_top,
+            left=border.left or THIN_BORDER.left,
+            right=border.right or THIN_BORDER.right,
+            bottom=border.bottom or THIN_BORDER.bottom,
+        )
+
+
+def apply_sign_employee_separator_borders(ws, start_row: int, end_row: int) -> None:
+    row = start_row
+    while row <= end_row:
+        apply_sign_employee_separator_border(ws, row)
+        row += 2
+
+
 def write_sign_sheet_headers(ws, year: int, month: int) -> None:
-    """Rows 1–5: title, spacers, column headers, symbol legend."""
+    """Rows 1–4: title, spacer, column headers, symbol legend."""
     days_in_month = calendar.monthrange(year, month)[1]
     last_col = max(SIGN_ABSENT_COL, SIGN_SUMMARY_END_COL + 2)
 
@@ -947,9 +1018,8 @@ def write_sign_sheet_headers(ws, year: int, month: int) -> None:
     )
     ws.row_dimensions[SIGN_TITLE_ROW].height = 28
 
-    for spacer_row in (SIGN_SPACER_ROW_1, SIGN_SPACER_ROW_2):
-        for col in range(1, last_col + 1):
-            ws.cell(row=spacer_row, column=col, value=None)
+    for col in range(1, last_col + 1):
+        ws.cell(row=SIGN_SPACER_ROW_1, column=col, value=None)
 
     for col, label in ((SIGN_NAME_COL, "姓名"), (SIGN_TIME_COL, "时间")):
         cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=label)
@@ -1003,13 +1073,7 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
         pm_row = current_row + 1
         employee_name = employee.name or ""
 
-        for row in (am_row, pm_row):
-            name_cell = ws.cell(row=row, column=SIGN_NAME_COL, value=employee_name or None)
-            name_cell.font = BODY_FONT
-            name_cell.alignment = CENTER
-
-        ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午").alignment = CENTER
-        ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午").alignment = CENTER
+        prepare_sign_employee_rows(ws, am_row, pm_row, employee_name)
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
@@ -1025,32 +1089,26 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
                 ws.cell(row=am_row, column=col, value="")
                 ws.cell(row=pm_row, column=col, value="")
 
-        for idx, symbol in enumerate(SIGN_COUNT_SYMBOLS):
-            col = SIGN_SUMMARY_START_COL + idx
-            for row in (am_row, pm_row):
-                ws.cell(row=row, column=col, value=sign_countif_formula(row, idx))
-                ws.cell(row=row, column=col).alignment = CENTER
-
-        for row in (am_row, pm_row):
-            ws.cell(
-                row=row,
-                column=SIGN_MEAL_TOTAL_COL,
-                value=sign_meal_total_formula(row),
-            )
-            ws.cell(row=row, column=SIGN_MEAL_TOTAL_COL).alignment = CENTER
-            ws.cell(
-                row=row,
-                column=SIGN_ABSENT_COL,
-                value=sign_absent_formula(row, work_days),
-            )
-            ws.cell(row=row, column=SIGN_ABSENT_COL).alignment = CENTER
+        write_sign_sheet_employee_am_pm_summary_formulas(
+            ws,
+            am_row,
+            pm_row,
+            work_days=work_days,
+        )
 
         current_row += 2
 
     last_data_row = max(current_row - 1, SIGN_LEGEND_ROW)
     _apply_border_range(ws, SIGN_HEADER_ROW, last_data_row, 1, SIGN_ABSENT_COL)
+    apply_sign_employee_separator_borders(ws, SIGN_DATA_START_ROW, last_data_row)
     apply_sign_sheet_column_widths(ws)
     apply_sign_sheet_data_row_heights(ws, SIGN_DATA_START_ROW, last_data_row)
+    apply_sign_sheet_freeze_panes(ws)
+
+
+def apply_sign_sheet_freeze_panes(ws) -> None:
+    """Freeze rows 1–4 (title through legend) and columns A–B (姓名 / 时间)."""
+    ws.freeze_panes = ws.cell(row=SIGN_DATA_START_ROW, column=SIGN_FREEZE_COL).coordinate
 
 
 def apply_sign_sheet_column_widths(ws) -> None:

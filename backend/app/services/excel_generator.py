@@ -55,6 +55,9 @@ from app.excel.template_generator import (
     configure_monthly_summary_headers,
     format_monthly_summary_sheet,
     generate_attendance_template,
+    apply_sign_employee_separator_borders,
+    apply_sign_sheet_freeze_panes,
+    prepare_sign_employee_rows,
     prepare_monthly_spacer_columns,
     write_overtime_calc_formulas,
     write_overtime_compensatory_formulas,
@@ -297,19 +300,8 @@ def map_sign_sheet_status(raw: str, rules=None) -> str:
 
 
 def _prepare_sign_employee_rows(ws, am_row: int, pm_row: int, name: str) -> None:
-    """Unmerge template merges and set 姓名 + 上午/下午 on both rows."""
-    for merged in list(ws.merged_cells.ranges):
-        if (
-            merged.min_row <= pm_row
-            and merged.max_row >= am_row
-            and merged.min_col <= SIGN_NAME_COL <= merged.max_col
-        ):
-            ws.unmerge_cells(str(merged))
-
-    ws.cell(row=am_row, column=SIGN_NAME_COL, value=name)
-    ws.cell(row=pm_row, column=SIGN_NAME_COL, value=name)
-    ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午")
-    ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午")
+    """Set merged 姓名 and 上午/下午 labels for one employee block."""
+    prepare_sign_employee_rows(ws, am_row, pm_row, name)
 
 
 def format_export_day_status(
@@ -558,6 +550,10 @@ def populate_sign_sheet(
             )
 
     write_sign_sheet_summary_formulas(ws, len(records), year, month)
+    if records:
+        last_row = SIGN_DATA_START_ROW + len(records) * 2 - 1
+        apply_sign_employee_separator_borders(ws, SIGN_DATA_START_ROW, last_row)
+    apply_sign_sheet_freeze_panes(ws)
 
 
 def populate_monthly_sheet(

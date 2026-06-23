@@ -39,8 +39,11 @@ from app.excel.template_generator import (
     SITUATION_DATA_START_ROW,
     THIN_BORDER,
     _apply_border_range,
+    apply_sign_employee_separator_borders,
     apply_sign_sheet_column_widths,
     apply_sign_sheet_data_row_heights,
+    apply_sign_sheet_freeze_panes,
+    prepare_sign_employee_rows,
     count_month_work_days,
     is_calendar_weekend,
     OUT_OF_MONTH_FILL,
@@ -186,13 +189,7 @@ def _populate_sign_sheet(
         daily_by_day = {item.day: item for item in employee_row.daily_records}
         name = employee_row.employee_name or ""
 
-        for row in (am_row, pm_row):
-            name_cell = ws.cell(row=row, column=SIGN_NAME_COL, value=name or None)
-            name_cell.font = BODY_FONT
-            name_cell.alignment = CENTER
-
-        ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午").alignment = CENTER
-        ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午").alignment = CENTER
+        prepare_sign_employee_rows(ws, am_row, pm_row, name)
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
@@ -222,10 +219,11 @@ def _populate_sign_sheet(
 
     last_row = SIGN_DATA_START_ROW + len(employees) * 2 - 1 if employees else SIGN_LEGEND_ROW
     _apply_border_range(ws, SIGN_HEADER_ROW, last_row, 1, SIGN_ABSENT_COL)
+    apply_sign_employee_separator_borders(ws, SIGN_DATA_START_ROW, last_row)
     apply_sign_sheet_column_widths(ws)
     apply_sign_sheet_data_row_heights(ws, SIGN_DATA_START_ROW, last_row)
+    apply_sign_sheet_freeze_panes(ws)
 
-    ws.freeze_panes = ws.cell(row=SIGN_DATA_START_ROW, column=SIGN_DAY_START_COL).coordinate
     return last_row
 
 

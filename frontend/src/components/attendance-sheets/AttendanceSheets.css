@@ -122,6 +122,83 @@
   word-break: break-all;
 }
 
+.attendance-sheets .signature-sheet-scroll {
+  --sign-name-width: 64px;
+  --sign-time-width: 44px;
+  --sign-head-title-height: 49px;
+  --sign-head-columns-height: 33px;
+  max-height: min(75vh, 920px);
+  overflow: auto;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+}
+
+.attendance-sheets .signature-sheet thead th {
+  background: #fafafa;
+}
+
+.attendance-sheets .signature-sheet .sign-head-row-title th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #f0f2f5;
+}
+
+.attendance-sheets .signature-sheet .sign-head-row-columns th {
+  position: sticky;
+  top: var(--sign-head-title-height);
+  z-index: 3;
+  background: #fafafa;
+}
+
+.attendance-sheets .signature-sheet .sign-head-row-legend th {
+  position: sticky;
+  top: calc(var(--sign-head-title-height) + var(--sign-head-columns-height));
+  z-index: 3;
+}
+
+.attendance-sheets .signature-sheet .sign-sticky-name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.attendance-sheets .signature-sheet .sign-sticky-time {
+  position: sticky;
+  left: var(--sign-name-width);
+  z-index: 2;
+  background: #fafafa;
+}
+
+.attendance-sheets .signature-sheet thead .sign-sticky-name,
+.attendance-sheets .signature-sheet thead .sign-sticky-time,
+.attendance-sheets .signature-sheet thead .sign-sticky-corner {
+  z-index: 5;
+}
+
+.attendance-sheets .signature-sheet thead .sign-sticky-corner {
+  position: sticky;
+  left: 0;
+  background: #fafafa;
+}
+
+.attendance-sheets .signature-sheet thead .sign-head-row-title .sign-sticky-corner {
+  background: #f0f2f5;
+}
+
+.attendance-sheets .signature-sheet thead .sign-head-row-columns .sign-sticky-name {
+  top: var(--sign-head-title-height);
+}
+
+.attendance-sheets .signature-sheet thead .sign-head-row-columns .sign-sticky-time {
+  top: var(--sign-head-title-height);
+}
+
+.attendance-sheets .signature-sheet thead .sign-head-row-legend .sign-sticky-corner {
+  top: calc(var(--sign-head-title-height) + var(--sign-head-columns-height));
+}
+
 .attendance-sheets .signature-sheet col.sign-day-col {
   width: 56px;
 }
@@ -143,6 +220,19 @@
   width: 56px;
   max-width: 56px;
   white-space: normal;
+}
+
+.attendance-sheets .signature-sheet tbody tr.sign-employee-block-start td {
+  border-top: 2px solid #333;
+}
+
+.attendance-sheets .signature-sheet tbody tr.sign-employee-block-start:first-of-type td {
+  border-top: 1px solid #d9d9d9;
+}
+
+.attendance-sheets .signature-sheet .sign-employee-name {
+  vertical-align: middle;
+  font-weight: 600;
 }
 
 .attendance-sheets .signature-sheet tbody tr {
