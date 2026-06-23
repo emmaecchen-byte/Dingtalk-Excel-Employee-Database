@@ -4,7 +4,7 @@ Idempotent demo database seeder for local testing without DingTalk.
 
 Seeds:
   - Demo Company + admin/viewer users
-  - 15 employees with May 2026 attendance (mixed anomalies)
+  - 30 employees with May 2026 attendance (mixed anomalies + 出差 patterns)
   - Excel snapshot + version_history
 
 Usage:
@@ -59,6 +59,10 @@ DEMO_ADMIN_EMAIL = "admin@demo.com"
 DEMO_VIEWER_EMAIL = "viewer@demo.com"
 DEMO_ADMIN_PASSWORD = "Admin123!"
 DEMO_VIEWER_PASSWORD = "Viewer123!"
+
+# DingTalk-style compound status for May business trips (05-05 → 05-09).
+MAY_TRIP_COMPOUND = "休息,出差05-05 08:30到05-09 18:15 5天"
+MAY_TRIP_CONTINUATION = "出差05-05 08:30到05-09 18:15 5天"
 
 DEMO_EMPLOYEES: List[Dict[str, Any]] = [
     {
@@ -271,7 +275,238 @@ DEMO_EMPLOYEES: List[Dict[str, Any]] = [
         "anomaly_summary": "旷工19天",
         "notes": "长期缺勤待核实",
     },
+    {
+        "name": "何静",
+        "department": "朋创",
+        "position": "工艺工程师",
+        "employee_code": "E016",
+        "dingtalk_user_id": "dt_user_016",
+        "total_attendance_days": 16,
+        "absenteeism_count": 0,
+        "lateness_count": 1,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "迟到1次",
+        "notes": None,
+        "may_business_trip": True,
+    },
+    {
+        "name": "林峰",
+        "department": "电机部",
+        "position": "电气工程师",
+        "employee_code": "E017",
+        "dingtalk_user_id": "dt_user_017",
+        "total_attendance_days": 17,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 1,
+        "supplement_submitted": True,
+        "anomaly_summary": "缺卡1天",
+        "notes": "华东出差",
+        "may_business_trip": True,
+    },
+    {
+        "name": "韩雪",
+        "department": "项目推进部",
+        "position": "商务专员",
+        "employee_code": "E018",
+        "dingtalk_user_id": "dt_user_018",
+        "total_attendance_days": 18,
+        "absenteeism_count": 0,
+        "lateness_count": 2,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "迟到2次",
+        "notes": "客户现场支持",
+        "may_business_trip": True,
+    },
+    {
+        "name": "罗斌",
+        "department": "质量部",
+        "position": "质量工程师",
+        "employee_code": "E019",
+        "dingtalk_user_id": "dt_user_019",
+        "total_attendance_days": 19,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": None,
+        "notes": "5月出差广深",
+        "may_business_trip": True,
+    },
+    {
+        "name": "梁艳",
+        "department": "财务部",
+        "position": "出纳",
+        "employee_code": "E020",
+        "dingtalk_user_id": "dt_user_020",
+        "total_attendance_days": 20,
+        "absenteeism_count": 0,
+        "lateness_count": 1,
+        "missing_punch_count": 1,
+        "supplement_submitted": True,
+        "anomaly_summary": "迟到1次、缺卡1天",
+        "notes": None,
+        "may_business_trip": True,
+    },
+    {
+        "name": "宋伟",
+        "department": "朋创",
+        "position": "设备主管",
+        "employee_code": "E021",
+        "dingtalk_user_id": "dt_user_021",
+        "total_attendance_days": 21,
+        "absenteeism_count": 1,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "旷工1天",
+        "notes": None,
+    },
+    {
+        "name": "唐琳",
+        "department": "人事部",
+        "position": "招聘专员",
+        "employee_code": "E022",
+        "dingtalk_user_id": "dt_user_022",
+        "total_attendance_days": 22,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 2,
+        "supplement_submitted": True,
+        "anomaly_summary": "缺卡2天",
+        "notes": "校招季",
+    },
+    {
+        "name": "冯刚",
+        "department": "电机部",
+        "position": "维修技师",
+        "employee_code": "E023",
+        "dingtalk_user_id": "dt_user_023",
+        "total_attendance_days": 18,
+        "absenteeism_count": 0,
+        "lateness_count": 3,
+        "missing_punch_count": 1,
+        "supplement_submitted": False,
+        "anomaly_summary": "迟到3次、缺卡1天",
+        "notes": None,
+    },
+    {
+        "name": "邓娟",
+        "department": "项目推进部",
+        "position": "文档工程师",
+        "employee_code": "E024",
+        "dingtalk_user_id": "dt_user_024",
+        "total_attendance_days": 20,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": None,
+        "notes": "驻场项目",
+        "may_business_trip": True,
+    },
+    {
+        "name": "曹勇",
+        "department": "朋创",
+        "position": "生产班长",
+        "employee_code": "E025",
+        "dingtalk_user_id": "dt_user_025",
+        "total_attendance_days": 19,
+        "absenteeism_count": 2,
+        "lateness_count": 1,
+        "missing_punch_count": 2,
+        "supplement_submitted": True,
+        "anomaly_summary": "旷工2天、迟到1次、缺卡2天",
+        "notes": "待核实",
+    },
+    {
+        "name": "彭丽",
+        "department": "质量部",
+        "position": "IQC检验",
+        "employee_code": "E026",
+        "dingtalk_user_id": "dt_user_026",
+        "total_attendance_days": 21,
+        "absenteeism_count": 0,
+        "lateness_count": 2,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "迟到2次",
+        "notes": None,
+    },
+    {
+        "name": "曾辉",
+        "department": "电机部",
+        "position": "测试工程师",
+        "employee_code": "E027",
+        "dingtalk_user_id": "dt_user_027",
+        "total_attendance_days": 17,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": None,
+        "notes": "宁波出差",
+        "may_business_trip": True,
+    },
+    {
+        "name": "萧红",
+        "department": "财务部",
+        "position": "成本会计",
+        "employee_code": "E028",
+        "dingtalk_user_id": "dt_user_028",
+        "total_attendance_days": 22,
+        "absenteeism_count": 0,
+        "lateness_count": 1,
+        "missing_punch_count": 1,
+        "supplement_submitted": True,
+        "anomaly_summary": "迟到1次、缺卡1天",
+        "notes": None,
+    },
+    {
+        "name": "程龙",
+        "department": "朋创",
+        "position": "仓储主管",
+        "employee_code": "E029",
+        "dingtalk_user_id": "dt_user_029",
+        "total_attendance_days": 20,
+        "absenteeism_count": 1,
+        "lateness_count": 2,
+        "missing_punch_count": 0,
+        "supplement_submitted": False,
+        "anomaly_summary": "旷工1天、迟到2次",
+        "notes": None,
+    },
+    {
+        "name": "袁梅",
+        "department": "人事部",
+        "position": "培训专员",
+        "employee_code": "E030",
+        "dingtalk_user_id": "dt_user_030",
+        "total_attendance_days": 18,
+        "absenteeism_count": 0,
+        "lateness_count": 0,
+        "missing_punch_count": 1,
+        "supplement_submitted": False,
+        "anomaly_summary": "缺卡1天",
+        "notes": "外出培训",
+        "may_business_trip": True,
+    },
 ]
+
+# Weekday leave assignments for May 2026 — populates 签字 tab symbol counts.
+LEAVE_DAY_OVERRIDES_BY_CODE: Dict[str, Dict[int, str]] = {
+    "E004": {18: "年假", 25: "年假"},
+    "E006": {12: "事假", 13: "事假"},
+    "E009": {19: "调休", 20: "调休"},
+    "E013": {11: "病假", 14: "病假"},
+    "E014": {21: "福利假"},
+    "E022": {26: "产假", 27: "产假"},
+    "E026": {15: "丧假"},
+    "E028": {22: "婚假", 29: "婚假"},
+    "E029": {28: "陪产假"},
+}
 
 DEMO_MANUAL_CHANGES = [
     {"employee_code": "E002", "field_name": "notes", "old_value": "", "new_value": "已提交补卡申请"},
@@ -285,6 +520,51 @@ def _is_weekend(year: int, month: int, day: int) -> bool:
     return date(year, month, day).weekday() >= 5
 
 
+def _effective_day_overrides(spec: Dict[str, Any]) -> Optional[Dict[int, str]]:
+    overrides: Dict[int, str] = dict(spec.get("day_overrides") or {})
+    code = spec.get("employee_code", "")
+    if code in LEAVE_DAY_OVERRIDES_BY_CODE:
+        overrides.update(LEAVE_DAY_OVERRIDES_BY_CODE[code])
+    return overrides or None
+
+
+def _summarize_leave_totals(day_values: Dict[str, Optional[str]]) -> Dict[str, int]:
+    totals = {
+        "personal": 0,
+        "sick": 0,
+        "annual": 0,
+        "compensatory": 0,
+    }
+    for value in day_values.values():
+        if not value:
+            continue
+        if "事假" in value:
+            totals["personal"] += 1
+        elif "病假" in value:
+            totals["sick"] += 1
+        elif "年假" in value:
+            totals["annual"] += 1
+        elif "调休" in value:
+            totals["compensatory"] += 1
+    return totals
+
+
+def _apply_may_business_trip(values: Dict[str, Optional[str]], year: int, month: int) -> None:
+    """Mark May 5–8 with DingTalk-style 休息+出差 compound text."""
+    if year != 2026 or month != 5:
+        return
+    days_in_month = calendar.monthrange(year, month)[1]
+    trip_days = {
+        5: MAY_TRIP_COMPOUND,
+        6: MAY_TRIP_CONTINUATION,
+        7: MAY_TRIP_CONTINUATION,
+        8: MAY_TRIP_CONTINUATION,
+    }
+    for day, status in trip_days.items():
+        if day <= days_in_month:
+            values[f"day_{day}"] = status
+
+
 def _build_day_values(
     year: int,
     month: int,
@@ -292,26 +572,44 @@ def _build_day_values(
     absenteeism_count: int,
     lateness_count: int,
     missing_punch_count: int,
+    may_business_trip: bool = False,
+    day_overrides: Optional[Dict[int, str]] = None,
 ) -> Dict[str, Optional[str]]:
     """Assign realistic day statuses for weekdays in the target month."""
     days_in_month = calendar.monthrange(year, month)[1]
     values: Dict[str, Optional[str]] = {f"day_{day}": None for day in range(1, 32)}
 
     weekdays = [day for day in range(1, days_in_month + 1) if not _is_weekend(year, month, day)]
+    reserved_days: set[int] = set()
+    if may_business_trip and year == 2026 and month == 5:
+        reserved_days.update({5, 6, 7, 8})
+
     for day in range(1, days_in_month + 1):
         if _is_weekend(year, month, day):
             values[f"day_{day}"] = "休息"
         else:
             values[f"day_{day}"] = "正常"
 
+    if may_business_trip:
+        _apply_may_business_trip(values, year, month)
+
+    if day_overrides:
+        for day, status in day_overrides.items():
+            if 1 <= day <= days_in_month:
+                values[f"day_{day}"] = status
+                if not _is_weekend(year, month, day):
+                    reserved_days.add(day)
+
     cursor = 0
-    late_minutes = [3, 9, 12, 18, 25]
+    late_minutes = [3, 9, 12, 18, 25, 7, 15, 22, 31, 45]
 
     def take_day(status: str) -> None:
         nonlocal cursor
         while cursor < len(weekdays):
             day = weekdays[cursor]
             cursor += 1
+            if day in reserved_days:
+                continue
             if values[f"day_{day}"] == "正常":
                 values[f"day_{day}"] = status
                 return
@@ -454,13 +752,17 @@ def _upsert_attendance(
     if record and not force:
         return record
 
+    day_overrides = _effective_day_overrides(spec)
     day_values = _build_day_values(
         DEMO_YEAR,
         DEMO_MONTH,
         absenteeism_count=int(spec["absenteeism_count"]),
         lateness_count=int(spec["lateness_count"]),
         missing_punch_count=int(spec["missing_punch_count"]),
+        may_business_trip=bool(spec.get("may_business_trip")),
+        day_overrides=day_overrides,
     )
+    leave_totals = _summarize_leave_totals(day_values)
     overtime_values = _build_overtime_day_values(
         DEMO_YEAR,
         DEMO_MONTH,
@@ -483,10 +785,10 @@ def _upsert_attendance(
     record.anomaly_summary = spec.get("anomaly_summary")
     record.supplement_submitted = bool(spec.get("supplement_submitted", False))
     record.notes = spec.get("notes")
-    record.total_personal_leave = 0
-    record.total_sick_leave = 0
-    record.total_annual_leave = 0
-    record.total_compensatory_leave = 0
+    record.total_personal_leave = leave_totals["personal"]
+    record.total_sick_leave = leave_totals["sick"]
+    record.total_annual_leave = leave_totals["annual"]
+    record.total_compensatory_leave = leave_totals["compensatory"]
     record.total_overtime_hours = round(
         sum(value or 0 for value in overtime_values.values()),
         1,

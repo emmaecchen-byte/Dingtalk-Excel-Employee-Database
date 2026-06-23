@@ -1,4 +1,17 @@
-export const SIGN_COUNT_SYMBOLS = ["√", "◇", "✬", "▼", "※", "●", "AL", "○", "FL"] as const;
+export const SIGN_COUNT_SYMBOLS = ["√", "◇", "✬", "▼", "※", "●", "AL", "○", "FL", "ML"] as const;
+
+export const SIGN_COUNT_LABELS: Record<(typeof SIGN_COUNT_SYMBOLS)[number], string> = {
+  "√": "出勤合计（餐补）",
+  "◇": "事假",
+  "✬": "调休",
+  "▼": "出差",
+  "※": "病假",
+  "●": "福利假",
+  AL: "年假",
+  "○": "产假/陪产假",
+  FL: "丧假",
+  ML: "婚假",
+};
 
 export const STATUS_CLASS_MAP: Record<string, string> = {
   "√": "status-present",

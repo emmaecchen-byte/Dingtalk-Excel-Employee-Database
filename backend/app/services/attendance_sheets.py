@@ -11,7 +11,10 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session, joinedload
 
 from app.excel.field_utils import get_overtime_day_hours
-from app.excel.template_generator import SIGN_COUNT_SYMBOLS, count_month_work_days
+from app.excel.template_generator import SIGN_LEGEND_SYMBOLS, count_month_work_days
+
+# Web 签字 tab counts all legend symbols (including 婚假 ML); Excel keeps 9 COUNTIF columns.
+WEB_SIGN_COUNT_SYMBOLS = tuple(symbol for symbol, _ in SIGN_LEGEND_SYMBOLS)
 from app.models import Company, MonthlyAttendance
 from app.excel.monthly_status_display import format_monthly_summary_day_status
 from app.services.excel_generator import (
@@ -23,7 +26,7 @@ from app.services.sync_counts import count_pending_conflicts, count_pending_upda
 
 
 def _count_sign_symbols(morning_values: List[str]) -> Dict[str, int]:
-    counts: Dict[str, int] = {symbol: 0 for symbol in SIGN_COUNT_SYMBOLS}
+    counts: Dict[str, int] = {symbol: 0 for symbol in WEB_SIGN_COUNT_SYMBOLS}
     for value in morning_values:
         if value in counts:
             counts[value] += 1

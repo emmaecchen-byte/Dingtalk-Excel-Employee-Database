@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import type { AttendanceSheetsResponse, EmployeeSheetRow } from "../../types/attendanceSheets";
 import {
+  SIGN_COUNT_LABELS,
   SIGN_COUNT_SYMBOLS,
   dayHeaders,
   formatGeneratedAt,
@@ -54,7 +55,7 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
             {companyName}员工{year}年{month}月考勤表
           </th>
           <th colSpan={31} className="header-title" />
-          <th colSpan={9} className="header-title">
+          <th colSpan={SIGN_COUNT_SYMBOLS.length + 1} className="header-title">
             缺勤统计
           </th>
         </tr>
@@ -66,9 +67,9 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
             <th key={`day-${index + 1}`}>{index + 1}</th>
           ))}
           {SIGN_COUNT_SYMBOLS.map((symbol) => (
-            <th key={symbol}>{symbol}</th>
+            <th key={symbol}>{SIGN_COUNT_LABELS[symbol]}</th>
           ))}
-          <th>缺勤</th>
+          <th>合计</th>
         </tr>
       </thead>
       <tbody>
