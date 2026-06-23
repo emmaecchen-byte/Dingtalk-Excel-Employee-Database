@@ -1,0 +1,14 @@
+---
+description: Avoid leaving background dev servers that turn Cursor agent UI orange
+alwaysApply: true
+---
+
+# Dev servers and Cursor UI
+
+When starting the local app:
+
+- Do **not** run backend/frontend with `block_until_ms: 0` unless the user explicitly asks to keep servers running in the background.
+- Prefer one foreground terminal per server, or tell the user to run `npm run dev:stop` when done.
+- When the user asks to save, close, or stop the project, run `npm run dev:stop` before finishing.
+
+Background uvicorn/vite processes leave orange backend/frontend tabs in Cursor's agent sidebar until they are stopped.

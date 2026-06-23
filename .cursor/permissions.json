@@ -1,0 +1,8 @@
+{
+  "autoReview": {
+    "block_instructions": [
+      "Do not start uvicorn, vite, or npm run dev as background shells (block_until_ms: 0) unless the user explicitly asks to keep servers running in the background.",
+      "When the user asks to save, close, or stop the project, stop dev servers on ports 8000, 5173, and 5174 before finishing."
+    ]
+  }
+}
