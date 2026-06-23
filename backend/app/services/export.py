@@ -22,6 +22,7 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session, joinedload
 
 from app.crud.abnormal_record import abnormal_record
+from app.excel.monthly_status_display import sign_sheet_day_cell_value, sign_sheet_late_style
 from app.excel.template_generator import (
     BODY_FONT,
     CENTER,
@@ -33,11 +34,19 @@ from app.excel.template_generator import (
     SIGN_DAY_START_COL,
     SIGN_HEADER_ROW,
     SIGN_LEGEND_ROW,
+    SIGN_NAME_COL,
+    SIGN_TIME_COL,
     SITUATION_DATA_START_ROW,
     THIN_BORDER,
     _apply_border_range,
+    apply_sign_sheet_column_widths,
+    apply_sign_sheet_data_row_heights,
     count_month_work_days,
     is_calendar_weekend,
+    OUT_OF_MONTH_FILL,
+    WEEKEND_FILL,
+    is_sign_sheet_empty_grey_cell,
+    is_sign_sheet_out_of_month,
     write_sign_sheet_employee_am_pm_summary_formulas,
     write_sign_sheet_headers,
     write_sign_sheet_legend,
@@ -123,17 +132,39 @@ def _half_day_symbol(status: Optional[str], rules) -> str:
     return map_status_to_symbol(status or "", rules)
 
 
-def _write_sign_day_cell(ws, row: int, col: int, symbol: str, *, year: int, month: int, day: int) -> None:
-    cell = ws.cell(row=row, column=col, value=symbol or None)
+def _write_sign_day_cell(
+    ws,
+    row: int,
+    col: int,
+    symbol: str,
+    *,
+    status_text: str = "",
+    year: int,
+    month: int,
+    day: int,
+) -> None:
+    value, is_late = sign_sheet_day_cell_value(symbol, status_text)
+    if symbol != "迟到" and not symbol and not value and is_sign_sheet_empty_grey_cell(
+        year, month, day, status_text=status_text
+    ):
+        cell = ws.cell(row=row, column=col, value=None)
+        cell.alignment = CENTER
+        cell.font = BODY_FONT
+        cell.fill = OUT_OF_MONTH_FILL if is_sign_sheet_out_of_month(year, month, day) else WEEKEND_FILL
+        return
+
+    cell = ws.cell(row=row, column=col, value=value)
+    if is_late:
+        fill, font = sign_sheet_late_style()
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        return
+
     cell.alignment = CENTER
     cell.font = BODY_FONT
-    if symbol:
-        return
-    days_in_month = calendar.monthrange(year, month)[1]
-    if day > days_in_month:
-        cell.fill = OUT_OF_MONTH_FILL
-    elif is_calendar_weekend(year, month, day):
-        cell.fill = WEEKEND_FILL
+    if not symbol and is_sign_sheet_empty_grey_cell(year, month, day, status_text=status_text):
+        cell.fill = OUT_OF_MONTH_FILL if is_sign_sheet_out_of_month(year, month, day) else WEEKEND_FILL
 
 
 def _populate_sign_sheet(
@@ -156,13 +187,12 @@ def _populate_sign_sheet(
         name = employee_row.employee_name or ""
 
         for row in (am_row, pm_row):
-            ws.cell(row=row, column=1, value=None)
-            name_cell = ws.cell(row=row, column=2, value=name or None)
+            name_cell = ws.cell(row=row, column=SIGN_NAME_COL, value=name or None)
             name_cell.font = BODY_FONT
             name_cell.alignment = CENTER
 
-        ws.cell(row=am_row, column=3, value="上午").alignment = CENTER
-        ws.cell(row=pm_row, column=3, value="下午").alignment = CENTER
+        ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午").alignment = CENTER
+        ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午").alignment = CENTER
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
@@ -172,10 +202,16 @@ def _populate_sign_sheet(
                 _write_sign_day_cell(ws, pm_row, col, "", year=year, month=month, day=day)
                 continue
 
-            am_symbol = _half_day_symbol(record.morning_status if record else None, rules)
-            pm_symbol = _half_day_symbol(record.afternoon_status if record else None, rules)
-            _write_sign_day_cell(ws, am_row, col, am_symbol, year=year, month=month, day=day)
-            _write_sign_day_cell(ws, pm_row, col, pm_symbol, year=year, month=month, day=day)
+            am_status = record.morning_status if record else ""
+            pm_status = record.afternoon_status if record else ""
+            am_symbol = _half_day_symbol(am_status, rules)
+            pm_symbol = _half_day_symbol(pm_status, rules)
+            _write_sign_day_cell(
+                ws, am_row, col, am_symbol, status_text=am_status, year=year, month=month, day=day
+            )
+            _write_sign_day_cell(
+                ws, pm_row, col, pm_symbol, status_text=pm_status, year=year, month=month, day=day
+            )
 
         write_sign_sheet_employee_am_pm_summary_formulas(
             ws,
@@ -186,11 +222,8 @@ def _populate_sign_sheet(
 
     last_row = SIGN_DATA_START_ROW + len(employees) * 2 - 1 if employees else SIGN_LEGEND_ROW
     _apply_border_range(ws, SIGN_HEADER_ROW, last_row, 1, SIGN_ABSENT_COL)
-    ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 12
-    ws.column_dimensions["C"].width = 8
-    for col in range(SIGN_DAY_START_COL, SIGN_ABSENT_COL + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 4
+    apply_sign_sheet_column_widths(ws)
+    apply_sign_sheet_data_row_heights(ws, SIGN_DATA_START_ROW, last_row)
 
     ws.freeze_panes = ws.cell(row=SIGN_DATA_START_ROW, column=SIGN_DAY_START_COL).coordinate
     return last_row

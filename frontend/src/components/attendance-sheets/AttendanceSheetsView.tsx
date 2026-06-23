@@ -1,13 +1,17 @@
 import { Fragment, useMemo, useState } from "react";
 import type { AttendanceSheetsResponse, EmployeeSheetRow } from "../../types/attendanceSheets";
 import {
-  SIGN_COUNT_LABELS,
   SIGN_COUNT_SYMBOLS,
+  SIGN_LEGEND_SYMBOLS,
+  SIGN_SUMMARY_COLUMN_COUNT,
+  SIGN_SUMMARY_HEADERS,
   dayHeaders,
   formatGeneratedAt,
-  isWeekend,
+  isSignSheetEmptyGreyCell,
   monthDateRange,
   monthlyStatusClass,
+  signDayDisplay,
+  signDayOffColumns,
   statusClass,
 } from "../../lib/attendanceSheetUtils";
 import { formatOvertimeValue, summarizeOvertimeDays } from "../../lib/overtimeCalc";
@@ -20,71 +24,131 @@ interface AttendanceSheetsViewProps {
   language: "zh" | "en";
 }
 
-function StatusCell({ value, year, month, day }: { value: string; year: number; month: number; day: number }) {
-  const weekend = !value && day > 0 && isWeekend(year, month, day);
-  const display = weekend ? "" : value;
-  const className = weekend ? "status-weekend" : statusClass(value);
-  return <td className={className}>{display}</td>;
-}
-
-function MonthlyStatusCell({
-  value,
+function SignStatusCell({
+  symbol,
+  displayText,
+  monthlyText,
   year,
   month,
   day,
 }: {
-  value: string;
+  symbol: string;
+  displayText?: string;
+  monthlyText: string;
   year: number;
   month: number;
   day: number;
 }) {
-  const weekend = !value && day > 0 && isWeekend(year, month, day);
-  const display = weekend ? "" : value;
-  const className = weekend ? "status-weekend" : monthlyStatusClass(value);
-  return <td className={`monthly-status-cell ${className}`.trim()}>{display}</td>;
+  const outOfMonth = day > new Date(year, month, 0).getDate();
+  const display = signDayDisplay(symbol, monthlyText, displayText);
+  const hasContent = Boolean(display);
+  const showGrey =
+    !hasContent && isSignSheetEmptyGreyCell(year, month, day, monthlyText) && symbol !== "迟到";
+  const statusClasses = monthlyStatusClass(display) || statusClass(display);
+  const isLate = symbol === "迟到" || statusClasses.includes("status-chidao");
+  const greyClass = showGrey ? (outOfMonth ? "sign-day-off-col-out" : "sign-day-off-col") : "";
+
+  return (
+    <td
+      className={["sign-day-col", greyClass, isLate ? "sign-late-cell" : "", statusClasses]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {display}
+    </td>
+  );
+}
+
+function MonthlyStatusCell({ value }: { value: string }) {
+  const className = monthlyStatusClass(value);
+  return <td className={`monthly-status-cell ${className}`.trim()}>{value}</td>;
 }
 
 function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
   const { year, month, company_name: companyName, employees } = data;
+  const dayOffColumns = useMemo(() => signDayOffColumns(year, month), [year, month]);
+  const daysInMonth = useMemo(() => new Date(year, month, 0).getDate(), [year, month]);
 
   return (
-    <table>
+    <table className="signature-sheet">
+      <colgroup>
+        <col className="sign-name-col" />
+        <col className="sign-info-col" />
+        {Array.from({ length: 31 }, (_, index) => (
+          <col key={`day-col-${index + 1}`} className="sign-day-col" />
+        ))}
+        {Array.from({ length: SIGN_SUMMARY_COLUMN_COUNT }, (_, index) => (
+          <col key={`summary-col-${index}`} className="sign-summary-col" />
+        ))}
+      </colgroup>
       <thead>
         <tr>
-          <th colSpan={3} className="header-title">
+          <th colSpan={2} className="header-title">
             {companyName}员工{year}年{month}月考勤表
           </th>
           <th colSpan={31} className="header-title" />
-          <th colSpan={SIGN_COUNT_SYMBOLS.length + 1} className="header-title">
+          <th colSpan={SIGN_SUMMARY_COLUMN_COUNT} className="header-title">
             缺勤统计
           </th>
         </tr>
         <tr>
-          <th>签名</th>
           <th>姓名</th>
           <th>时间</th>
-          {Array.from({ length: 31 }, (_, index) => (
-            <th key={`day-${index + 1}`}>{index + 1}</th>
+          {Array.from({ length: 31 }, (_, index) => {
+            const day = index + 1;
+            const outOfMonth = day > daysInMonth;
+            const dayOff = dayOffColumns[index];
+            const className = [
+              "sign-day-col",
+              dayOff ? (outOfMonth ? "sign-day-off-col-out" : "sign-day-off-col") : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+              <th key={`day-${day}`} className={className}>
+                {outOfMonth ? `${day}*` : day}
+              </th>
+            );
+          })}
+          {SIGN_SUMMARY_HEADERS.map((label) => (
+            <th key={label}>{label}</th>
           ))}
-          {SIGN_COUNT_SYMBOLS.map((symbol) => (
-            <th key={symbol}>{SIGN_COUNT_LABELS[symbol]}</th>
+        </tr>
+        <tr className="sign-legend-row">
+          <th colSpan={2} />
+          {Array.from({ length: 31 }, (_, index) => {
+            const day = index + 1;
+            const outOfMonth = day > daysInMonth;
+            const dayOff = dayOffColumns[index];
+            const className = [
+              "sign-day-col",
+              dayOff ? (outOfMonth ? "sign-day-off-col-out" : "sign-day-off-col") : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return <th key={`legend-day-${day}`} className={className} />;
+          })}
+          {SIGN_LEGEND_SYMBOLS.map(({ symbol }) => (
+            <th key={`legend-${symbol}`}>{symbol}</th>
           ))}
-          <th>合计</th>
+          <th />
+          <th />
         </tr>
       </thead>
       <tbody>
         {employees.map((employee) => (
           <Fragment key={employee.id}>
             <tr>
-              <td />
               <td rowSpan={2} className="employee-name">
                 {employee.name}
               </td>
               <td className="time-slot">上午</td>
               {employee.morning.map((value, index) => (
-                <StatusCell
+                <SignStatusCell
                   key={`${employee.id}-am-${index}`}
-                  value={value}
+                  symbol={value}
+                  displayText={employee.morning_display?.[index]}
+                  monthlyText={employee.days[index] ?? ""}
                   year={year}
                   month={month}
                   day={index + 1}
@@ -93,15 +157,17 @@ function SignatureSheet({ data }: { data: AttendanceSheetsResponse }) {
               {SIGN_COUNT_SYMBOLS.map((symbol) => (
                 <td key={`${employee.id}-count-${symbol}`}>{employee.sign_counts[symbol] ?? 0}</td>
               ))}
+              <td rowSpan={2}>{employee.sign_meal_total ?? 0}</td>
               <td rowSpan={2}>{employee.absent_days}</td>
             </tr>
             <tr>
-              <td />
               <td className="time-slot">下午</td>
               {employee.afternoon.map((value, index) => (
-                <StatusCell
+                <SignStatusCell
                   key={`${employee.id}-pm-${index}`}
-                  value={value}
+                  symbol={value}
+                  displayText={employee.afternoon_display?.[index]}
+                  monthlyText={employee.days[index] ?? ""}
                   year={year}
                   month={month}
                   day={index + 1}
@@ -140,9 +206,7 @@ function MonthlySheet({ data }: { data: AttendanceSheetsResponse }) {
         <tr>
           <th>姓名</th>
           {headers.map((label, index) => (
-            <th key={`monthly-header-${index}`} className={label === "六" || label === "日" ? "status-weekend" : ""}>
-              {label}
-            </th>
+            <th key={`monthly-header-${index}`}>{label}</th>
           ))}
         </tr>
       </thead>
@@ -151,13 +215,7 @@ function MonthlySheet({ data }: { data: AttendanceSheetsResponse }) {
           <tr key={employee.id}>
             <td className="employee-name">{employee.name}</td>
             {employee.days.map((value, index) => (
-              <MonthlyStatusCell
-                key={`${employee.id}-day-${index}`}
-                value={value}
-                year={year}
-                month={month}
-                day={index + 1}
-              />
+              <MonthlyStatusCell key={`${employee.id}-day-${index}`} value={value} />
             ))}
           </tr>
         ))}
@@ -251,7 +309,6 @@ function explanationRows(employees: EmployeeSheetRow[]): EmployeeSheetRow[] {
 }
 
 function ExplanationSheet({ data }: { data: AttendanceSheetsResponse }) {
-  const { year, month } = data;
   const rows = explanationRows(data.employees);
 
   return (
@@ -274,7 +331,7 @@ function ExplanationSheet({ data }: { data: AttendanceSheetsResponse }) {
           rows.map((employee) => (
             <tr key={employee.id}>
               <td className="employee-name">{employee.name}</td>
-              <td>{employee.first_anomaly_date ?? `${year}-${String(month).padStart(2, "0")}-01`}</td>
+              <td>{employee.first_anomaly_date ?? ""}</td>
               <td>{employee.anomaly_summary ?? ""}</td>
               <td>{employee.supplement_submitted ? "Y" : ""}</td>
               <td>{employee.notes ?? ""}</td>

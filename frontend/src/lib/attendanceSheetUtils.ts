@@ -1,17 +1,75 @@
-export const SIGN_COUNT_SYMBOLS = ["√", "◇", "✬", "▼", "※", "●", "AL", "○", "FL", "ML"] as const;
+/** Symbol legend columns AJ–AS (row 5 in Excel); ML in AS5. */
+export const SIGN_LEGEND_SYMBOLS = [
+  { symbol: "√", label: "出勤" },
+  { symbol: "◇", label: "事假" },
+  { symbol: "✬", label: "调休" },
+  { symbol: "▼", label: "出差" },
+  { symbol: "※", label: "病假" },
+  { symbol: "●", label: "福利假" },
+  { symbol: "AL", label: "年假" },
+  { symbol: "○", label: "产假/陪产假" },
+  { symbol: "FL", label: "丧假" },
+  { symbol: "ML", label: "婚假" },
+] as const;
 
-export const SIGN_COUNT_LABELS: Record<(typeof SIGN_COUNT_SYMBOLS)[number], string> = {
-  "√": "出勤合计（餐补）",
-  "◇": "事假",
-  "✬": "调休",
-  "▼": "出差",
-  "※": "病假",
-  "●": "福利假",
-  AL: "年假",
-  "○": "产假/陪产假",
-  FL: "丧假",
-  ML: "婚假",
-};
+export const SIGN_COUNT_SYMBOLS = SIGN_LEGEND_SYMBOLS.map((entry) => entry.symbol);
+
+/** Row 3 summary headers: 10 symbol columns + 出勤合计 + 合计. */
+export const SIGN_SUMMARY_HEADERS = [
+  ...SIGN_LEGEND_SYMBOLS.map((entry) => entry.label),
+  "出勤合计",
+  "合计",
+] as const;
+
+export const SIGN_SUMMARY_COLUMN_COUNT = SIGN_SUMMARY_HEADERS.length;
+
+export function formatSignLateDisplay(monthlyText: string): string | null {
+  if (!monthlyText || !monthlyText.includes("迟到")) {
+    return null;
+  }
+  const match = monthlyText.match(/(\d+)\s*分钟/);
+  if (match) {
+    return `上班\n迟到1\n${match[1]}分钟`;
+  }
+  return "上班\n迟到1";
+}
+
+export function isPureRestStatus(text: string): boolean {
+  return text.trim() === "休息";
+}
+
+export function isSignSheetDayOffColumn(year: number, month: number, day: number): boolean {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  if (day < 1 || day > daysInMonth) {
+    return true;
+  }
+  return isWeekend(year, month, day);
+}
+
+export function isSignSheetEmptyGreyCell(
+  year: number,
+  month: number,
+  day: number,
+  monthlyText?: string,
+): boolean {
+  if (isSignSheetDayOffColumn(year, month, day)) {
+    return true;
+  }
+  return isPureRestStatus(monthlyText ?? "");
+}
+
+export function signDayOffColumns(year: number, month: number): boolean[] {
+  return Array.from({ length: 31 }, (_, index) => isSignSheetDayOffColumn(year, month, index + 1));
+}
+export function signDayDisplay(symbol: string, monthlyText: string, displayText?: string): string {
+  if (displayText) {
+    return displayText;
+  }
+  if (symbol === "迟到" && monthlyText) {
+    return formatSignLateDisplay(monthlyText) ?? symbol;
+  }
+  return symbol;
+}
 
 export const STATUS_CLASS_MAP: Record<string, string> = {
   "√": "status-present",

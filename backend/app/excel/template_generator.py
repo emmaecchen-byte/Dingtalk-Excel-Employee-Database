@@ -32,29 +32,22 @@ SIGN_SPACER_ROW_2 = 4
 SIGN_LEGEND_ROW = 5
 SIGN_DATA_START_ROW = 6
 
-SIGN_DAY_START_COL = 4  # D
-SIGN_DAY_END_COL = 34  # AH (31 days)
+SIGN_NAME_COL = 1  # A = 姓名
+SIGN_TIME_COL = 2  # B = 时间
+SIGN_DAY_START_COL = 3  # C = day 1
+SIGN_DAY_END_COL = 33  # AG = day 31
 SIGN_DAY_COUNT = 31
+SIGN_DAY_COL_WIDTH = 8  # wide enough for 3-line 迟到 cells without stretching rows
+SIGN_SUMMARY_COL_WIDTH = 4
+SIGN_AM_PM_ROW_HEIGHT = 28
 
-SIGN_SUMMARY_START_COL = 36  # AJ
-SIGN_SUMMARY_END_COL = 44  # AR
-SIGN_LEGEND_ML_COL = 45  # AS row 5: ML (婚假) label
-SIGN_ABSENT_COL = 45  # AS data rows: 合计 = 应出勤 - 出勤
+SIGN_SUMMARY_START_COL = 35  # AI
+SIGN_SUMMARY_END_COL = 44  # AR — last symbol COUNTIF column (婚假 / ML)
+SIGN_MEAL_TOTAL_COL = 45  # AS — 出勤合计 (√ + ▼)
+SIGN_ABSENT_COL = 46  # AT — 合计 (应出勤 − 出勤)
+SIGN_LEGEND_ML_COL = 44  # AR5 — ML (婚假) legend symbol
 
-# Row 3 summary headers above COUNTIF columns AJ–AR and 合计 in AS
-SIGN_SUMMARY_HEADER_LABELS: Tuple[str, ...] = (
-    "出勤合计",
-    "事假",
-    "调休",
-    "出差",
-    "病假",
-    "福利假",
-    "年假",
-    "产假/陪产假",
-    "丧假",
-)
-
-# Legend symbols in AJ5–AS5 (symbol only in cell; label in comment / adjacent doc)
+# Legend symbols in AI5–AR5 (symbol only in cell; label in row 3 header)
 SIGN_LEGEND_SYMBOLS: Tuple[Tuple[str, str], ...] = (
     ("√", "出勤"),
     ("◇", "事假"),
@@ -68,7 +61,15 @@ SIGN_LEGEND_SYMBOLS: Tuple[Tuple[str, str], ...] = (
     ("ML", "婚假"),
 )
 
-SIGN_COUNT_SYMBOLS: Tuple[str, ...] = tuple(symbol for symbol, _ in SIGN_LEGEND_SYMBOLS[:9])
+SIGN_COUNT_SYMBOLS: Tuple[str, ...] = tuple(symbol for symbol, _ in SIGN_LEGEND_SYMBOLS)
+
+# Row 3 summary headers above COUNTIF columns AI–AR, then AS/AT
+SIGN_SUMMARY_HEADER_LABELS: Tuple[str, ...] = tuple(
+    label for _symbol, label in SIGN_LEGEND_SYMBOLS
+)
+
+SIGN_MEAL_TOTAL_HEADER = "出勤合计"
+SIGN_ABSENT_HEADER = "合计"
 
 # 月度汇总 — name in A, daily status B–AF (31 days)
 MONTHLY_TITLE_ROW = 1
@@ -180,6 +181,33 @@ def monthly_day_header_label(year: int, month: int, day: int) -> str:
 
 def is_calendar_weekend(year: int, month: int, day: int) -> bool:
     return date(year, month, day).weekday() >= 5
+
+
+def is_sign_sheet_out_of_month(year: int, month: int, day: int) -> bool:
+    days_in_month = calendar.monthrange(year, month)[1]
+    return day < 1 or day > days_in_month
+
+
+def is_pure_rest_day_status(text: str) -> bool:
+    """True when the day is off (休息 only — not 休息,出差 compounds)."""
+    value = (text or "").strip()
+    return value == "休息"
+
+
+def is_sign_sheet_day_off_column(year: int, month: int, day: int) -> bool:
+    """Weekends and padded days beyond the month get a full grey column."""
+    if is_sign_sheet_out_of_month(year, month, day):
+        return True
+    return is_calendar_weekend(year, month, day)
+
+
+def is_sign_sheet_empty_grey_cell(year: int, month: int, day: int, *, status_text: str = "") -> bool:
+    """Grey background for empty cells on weekends, padded days, or pure 休息 days."""
+    if is_sign_sheet_out_of_month(year, month, day):
+        return True
+    if is_calendar_weekend(year, month, day):
+        return True
+    return is_pure_rest_day_status(status_text)
 
 
 def count_month_work_days(year: int, month: int) -> int:
@@ -325,10 +353,10 @@ def format_monthly_summary_sheet(
     last_row: int,
 ) -> None:
     """
-    Apply borders, alignment, and weekend column highlighting to 月度汇总.
+    Apply borders and alignment to 月度汇总.
 
     Name column (A): left-aligned. Daily headers and status (B–AF): centered.
-    Weekend columns (六/日): gray background.
+    Status-specific fills come from ``monthly_summary_status_style`` when data is written.
     """
     days_in_month = calendar.monthrange(year, month)[1]
     apply_monthly_column_widths(ws)
@@ -354,20 +382,12 @@ def format_monthly_summary_sheet(
                         cell.font = BODY_FONT
                 continue
 
-            day = col - MONTHLY_DAILY_START_COL + 1
             cell.alignment = CENTER
-            has_status_value = row >= MONTHLY_DATA_START_ROW and bool(cell.value)
-            if has_status_value:
-                continue
-            if day > days_in_month:
-                cell.fill = OUT_OF_MONTH_FILL
-            elif is_calendar_weekend(year, month, day):
-                cell.fill = WEEKEND_FILL
-                if row == MONTHLY_HEADER_ROW:
-                    cell.font = HEADER_FONT
-            elif row == MONTHLY_HEADER_ROW:
+            if row == MONTHLY_HEADER_ROW:
                 cell.fill = HEADER_FILL
                 cell.font = HEADER_FONT
+            elif row >= MONTHLY_DATA_START_ROW:
+                cell.font = BODY_FONT
 
     prepare_monthly_spacer_columns(ws, last_row=last_row)
 
@@ -397,10 +417,17 @@ def sign_countif_formula(data_row: int, legend_col_index: int) -> str:
     return f"=COUNTIF({day_start}{data_row}:{day_end}{data_row},${legend_col}$5)"
 
 
+def sign_meal_total_formula(data_row: int) -> str:
+    """AS column: meal allowance days = 出勤 (√) + 出差 (▼)."""
+    present_col = _summary_col_sign(0)
+    trip_col = _summary_col_sign(3)
+    return f"={present_col}{data_row}+{trip_col}{data_row}"
+
+
 def sign_absent_formula(data_row: int, work_days: int) -> str:
-    """AS column: working days minus attendance count in AJ (合计 = 应出勤 - 出勤)."""
-    aj_col = _summary_col_sign(0)
-    return f"={work_days}-{aj_col}{data_row}"
+    """AT column: 合计 = 应出勤 − 出勤 (√ in AI)."""
+    present_col = _summary_col_sign(0)
+    return f"={work_days}-{present_col}{data_row}"
 
 
 def write_sign_sheet_employee_summary_formulas(
@@ -409,11 +436,18 @@ def write_sign_sheet_employee_summary_formulas(
     *,
     work_days: int,
 ) -> None:
-    """Write AJ–AR COUNTIF formulas and AS 合计 formula for one 签字 data row."""
+    """Write AI–AR COUNTIF formulas, AS 出勤合计, and AT 合计 for one 签字 data row."""
     for idx in range(len(SIGN_COUNT_SYMBOLS)):
         col = SIGN_SUMMARY_START_COL + idx
         cell = ws.cell(row=data_row, column=col, value=sign_countif_formula(data_row, idx))
         cell.alignment = CENTER
+
+    meal_cell = ws.cell(
+        row=data_row,
+        column=SIGN_MEAL_TOTAL_COL,
+        value=sign_meal_total_formula(data_row),
+    )
+    meal_cell.alignment = CENTER
 
     absent_cell = ws.cell(
         row=data_row,
@@ -890,25 +924,13 @@ def sign_legend_cell_text(symbol: str, label: str) -> str:
 
 
 def write_sign_sheet_legend(ws) -> None:
-    """Write symbol legend to AJ5–AR5; AS5 = ML (婚假) label."""
+    """Write symbol legend to AI5–AR5 (ML in AR5)."""
     for idx, (symbol, _label) in enumerate(SIGN_LEGEND_SYMBOLS):
-        if idx >= len(SIGN_COUNT_SYMBOLS):
-            break
         col = SIGN_SUMMARY_START_COL + idx
         cell = ws.cell(row=SIGN_LEGEND_ROW, column=col, value=symbol)
         cell.font = HEADER_FONT
         cell.alignment = CENTER
         cell.fill = HEADER_FILL
-
-    ml_symbol, ml_label = SIGN_LEGEND_SYMBOLS[len(SIGN_COUNT_SYMBOLS)]
-    ml_cell = ws.cell(
-        row=SIGN_LEGEND_ROW,
-        column=SIGN_LEGEND_ML_COL,
-        value=sign_legend_cell_text(ml_symbol, ml_label),
-    )
-    ml_cell.font = HEADER_FONT
-    ml_cell.alignment = CENTER
-    ml_cell.fill = HEADER_FILL
 
 
 def write_sign_sheet_headers(ws, year: int, month: int) -> None:
@@ -929,7 +951,7 @@ def write_sign_sheet_headers(ws, year: int, month: int) -> None:
         for col in range(1, last_col + 1):
             ws.cell(row=spacer_row, column=col, value=None)
 
-    for col, label in ((1, "签名"), (2, "姓名"), (3, "时间")):
+    for col, label in ((SIGN_NAME_COL, "姓名"), (SIGN_TIME_COL, "时间")):
         cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=label)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
@@ -940,10 +962,14 @@ def write_sign_sheet_headers(ws, year: int, month: int) -> None:
         value = day if day <= days_in_month else f"{day}*"
         cell = ws.cell(row=SIGN_HEADER_ROW, column=col, value=value)
         cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL
         cell.alignment = CENTER
-        if day > days_in_month:
+        if is_sign_sheet_out_of_month(year, month, day):
             cell.font = Font(name="宋体", size=10, bold=True, color="999999")
+            cell.fill = OUT_OF_MONTH_FILL
+        elif is_calendar_weekend(year, month, day):
+            cell.fill = WEEKEND_FILL
+        else:
+            cell.fill = HEADER_FILL
 
     for idx, label in enumerate(SIGN_SUMMARY_HEADER_LABELS):
         col = SIGN_SUMMARY_START_COL + idx
@@ -952,7 +978,12 @@ def write_sign_sheet_headers(ws, year: int, month: int) -> None:
         cell.fill = HEADER_FILL
         cell.alignment = CENTER
 
-    total_header = ws.cell(row=SIGN_HEADER_ROW, column=SIGN_ABSENT_COL, value="合计")
+    meal_header = ws.cell(row=SIGN_HEADER_ROW, column=SIGN_MEAL_TOTAL_COL, value=SIGN_MEAL_TOTAL_HEADER)
+    meal_header.font = HEADER_FONT
+    meal_header.fill = HEADER_FILL
+    meal_header.alignment = CENTER
+
+    total_header = ws.cell(row=SIGN_HEADER_ROW, column=SIGN_ABSENT_COL, value=SIGN_ABSENT_HEADER)
     total_header.font = HEADER_FONT
     total_header.fill = HEADER_FILL
     total_header.alignment = CENTER
@@ -972,22 +1003,24 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
         pm_row = current_row + 1
         employee_name = employee.name or ""
 
-        ws.cell(row=am_row, column=1, value=None)
-        ws.cell(row=pm_row, column=1, value=None)
         for row in (am_row, pm_row):
-            name_cell = ws.cell(row=row, column=2, value=employee_name or None)
+            name_cell = ws.cell(row=row, column=SIGN_NAME_COL, value=employee_name or None)
             name_cell.font = BODY_FONT
             name_cell.alignment = CENTER
 
-        ws.cell(row=am_row, column=3, value="上午").alignment = CENTER
-        ws.cell(row=pm_row, column=3, value="下午").alignment = CENTER
+        ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午").alignment = CENTER
+        ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午").alignment = CENTER
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
             if day > days_in_month:
                 for row in (am_row, pm_row):
-                    ws.cell(row=row, column=col, value="")
-                    ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor="F2F2F2")
+                    cell = ws.cell(row=row, column=col, value="")
+                    cell.fill = OUT_OF_MONTH_FILL
+            elif is_calendar_weekend(year, month, day):
+                for row in (am_row, pm_row):
+                    cell = ws.cell(row=row, column=col, value="")
+                    cell.fill = WEEKEND_FILL
             else:
                 ws.cell(row=am_row, column=col, value="")
                 ws.cell(row=pm_row, column=col, value="")
@@ -1001,6 +1034,12 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
         for row in (am_row, pm_row):
             ws.cell(
                 row=row,
+                column=SIGN_MEAL_TOTAL_COL,
+                value=sign_meal_total_formula(row),
+            )
+            ws.cell(row=row, column=SIGN_MEAL_TOTAL_COL).alignment = CENTER
+            ws.cell(
+                row=row,
                 column=SIGN_ABSENT_COL,
                 value=sign_absent_formula(row, work_days),
             )
@@ -1010,11 +1049,22 @@ def _build_sign_sheet(ws, year: int, month: int, employees: Sequence[TemplateEmp
 
     last_data_row = max(current_row - 1, SIGN_LEGEND_ROW)
     _apply_border_range(ws, SIGN_HEADER_ROW, last_data_row, 1, SIGN_ABSENT_COL)
-    ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 12
-    ws.column_dimensions["C"].width = 8
-    for col in range(SIGN_DAY_START_COL, SIGN_ABSENT_COL + 1):
-        ws.column_dimensions[_col_letter(col)].width = 4
+    apply_sign_sheet_column_widths(ws)
+    apply_sign_sheet_data_row_heights(ws, SIGN_DATA_START_ROW, last_data_row)
+
+
+def apply_sign_sheet_column_widths(ws) -> None:
+    ws.column_dimensions[_col_letter(SIGN_NAME_COL)].width = 12
+    ws.column_dimensions[_col_letter(SIGN_TIME_COL)].width = 8
+    for col in range(SIGN_DAY_START_COL, SIGN_DAY_END_COL + 1):
+        ws.column_dimensions[_col_letter(col)].width = SIGN_DAY_COL_WIDTH
+    for col in range(SIGN_SUMMARY_START_COL, SIGN_ABSENT_COL + 1):
+        ws.column_dimensions[_col_letter(col)].width = SIGN_SUMMARY_COL_WIDTH
+
+
+def apply_sign_sheet_data_row_heights(ws, start_row: int, end_row: int) -> None:
+    for row in range(start_row, end_row + 1):
+        ws.row_dimensions[row].height = SIGN_AM_PM_ROW_HEIGHT
 
 
 def _build_situation_sheet(ws) -> None:

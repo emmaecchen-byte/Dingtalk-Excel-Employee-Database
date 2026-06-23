@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment
 from sqlalchemy.orm import Session, joinedload
 
 from app.excel.template_generator import (
@@ -44,7 +45,9 @@ from app.excel.template_generator import (
     SIGN_DAY_COUNT,
     SIGN_DAY_START_COL,
     SIGN_HEADER_ROW,
+    SIGN_NAME_COL,
     SIGN_SUMMARY_START_COL,
+    SIGN_TIME_COL,
     SITUATION_DATA_START_ROW,
     TEMPLATE_SHEETS,
     TemplateEmployee,
@@ -62,11 +65,19 @@ from app.excel.template_generator import (
     write_sign_sheet_legend,
     write_sign_sheet_headers,
     write_sign_sheet_summary_formulas,
+    BODY_FONT,
+    CENTER,
+    OUT_OF_MONTH_FILL,
+    WEEKEND_FILL,
+    is_sign_sheet_empty_grey_cell,
+    is_sign_sheet_out_of_month,
 )
 from app.excel.field_utils import get_overtime_day_hours
 from app.excel.monthly_status_display import (
     format_monthly_summary_day_status,
     monthly_summary_status_style,
+    sign_sheet_day_cell_value,
+    sign_sheet_late_style,
 )
 from app.models import MonthlyAttendance
 from app.services.situation_sheet import collect_situation_rows
@@ -248,19 +259,10 @@ def combined_day_status(am_value: str, pm_value: str) -> str:
     return am_value or pm_value
 
 
-def _has_anomaly_in_day(value: str) -> bool:
-    if not value:
-        return False
-    am_value, pm_value = split_day_halves(value)
-    return am_value in ANOMALY_SYMBOLS or pm_value in ANOMALY_SYMBOLS
-
-
 def first_anomaly_date(record: MonthlyAttendance, year: int, month: int) -> Optional[str]:
-    days_in_month = calendar.monthrange(year, month)[1]
-    for day in range(1, days_in_month + 1):
-        if _has_anomaly_in_day(get_day_value(record, day)):
-            return f"{year}-{month:02d}-{day:02d}"
-    return None
+    from app.services.situation_sheet import situation_explanation_date
+
+    return situation_explanation_date(record, year, month)
 
 
 def resolve_day_value(record: MonthlyAttendance, day: int) -> str:
@@ -295,22 +297,19 @@ def map_sign_sheet_status(raw: str, rules=None) -> str:
 
 
 def _prepare_sign_employee_rows(ws, am_row: int, pm_row: int, name: str) -> None:
-    """Unmerge template merges and set blank 签名 + duplicate 姓名 on both rows."""
+    """Unmerge template merges and set 姓名 + 上午/下午 on both rows."""
     for merged in list(ws.merged_cells.ranges):
         if (
             merged.min_row <= pm_row
             and merged.max_row >= am_row
-            and merged.min_col <= 2
-            and merged.max_col >= 1
+            and merged.min_col <= SIGN_NAME_COL <= merged.max_col
         ):
             ws.unmerge_cells(str(merged))
 
-    ws.cell(row=am_row, column=1, value=None)
-    ws.cell(row=pm_row, column=1, value=None)
-    ws.cell(row=am_row, column=2, value=name)
-    ws.cell(row=pm_row, column=2, value=name)
-    ws.cell(row=am_row, column=3, value="上午")
-    ws.cell(row=pm_row, column=3, value="下午")
+    ws.cell(row=am_row, column=SIGN_NAME_COL, value=name)
+    ws.cell(row=pm_row, column=SIGN_NAME_COL, value=name)
+    ws.cell(row=am_row, column=SIGN_TIME_COL, value="上午")
+    ws.cell(row=pm_row, column=SIGN_TIME_COL, value="下午")
 
 
 def format_export_day_status(
@@ -433,9 +432,9 @@ def _count_template_employee_slots(sign_ws) -> int:
     count = 0
     row = SIGN_DATA_START_ROW
     while True:
-        if sign_ws.cell(row=row, column=3).value != "上午":
+        if sign_ws.cell(row=row, column=SIGN_TIME_COL).value != "上午":
             break
-        if sign_ws.cell(row=row + 1, column=3).value != "下午":
+        if sign_ws.cell(row=row + 1, column=SIGN_TIME_COL).value != "下午":
             break
         count += 1
         row += 2
@@ -479,6 +478,44 @@ def load_workbook_from_template(
     return build_attendance_workbook(year, month, employees)
 
 
+def _apply_sign_day_off_cell(ws, row: int, col: int, *, year: int, month: int, day: int) -> None:
+    cell = ws.cell(row=row, column=col, value=None)
+    cell.font = BODY_FONT
+    cell.alignment = CENTER
+    cell.fill = OUT_OF_MONTH_FILL if is_sign_sheet_out_of_month(year, month, day) else WEEKEND_FILL
+
+
+def _apply_sign_day_cell(
+    ws,
+    row: int,
+    col: int,
+    symbol: str,
+    *,
+    status_text: str,
+    year: int,
+    month: int,
+    day: int,
+) -> None:
+    value, is_late = sign_sheet_day_cell_value(symbol, status_text)
+    if symbol != "迟到" and not symbol and not value and is_sign_sheet_empty_grey_cell(
+        year, month, day, status_text=status_text
+    ):
+        _apply_sign_day_off_cell(ws, row, col, year=year, month=month, day=day)
+        return
+
+    cell = ws.cell(row=row, column=col, value=value)
+    if is_late:
+        fill, font = sign_sheet_late_style()
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    else:
+        cell.font = BODY_FONT
+        cell.alignment = CENTER
+        if not symbol and is_sign_sheet_empty_grey_cell(year, month, day, status_text=status_text):
+            _apply_sign_day_off_cell(ws, row, col, year=year, month=month, day=day)
+
+
 def populate_sign_sheet(
     ws,
     records: Sequence[MonthlyAttendance],
@@ -499,18 +536,26 @@ def populate_sign_sheet(
 
         for day in range(1, SIGN_DAY_COUNT + 1):
             col = SIGN_DAY_START_COL + day - 1
-            if day > days_in_month:
-                ws.cell(row=am_row, column=col, value=None)
-                ws.cell(row=pm_row, column=col, value=None)
-                continue
-            day_value = resolve_day_value(record, day)
-            symbol = map_sign_sheet_status(day_value, rules)
-            if not symbol:
-                ws.cell(row=am_row, column=col, value=None)
-                ws.cell(row=pm_row, column=col, value=None)
-                continue
-            ws.cell(row=am_row, column=col, value=symbol)
-            ws.cell(row=pm_row, column=col, value=symbol)
+            day_value = resolve_day_value(record, day) or "" if day <= days_in_month else ""
+            symbol = map_sign_sheet_status(day_value, rules) if day <= days_in_month else ""
+            monthly = (
+                format_monthly_summary_day_status(
+                    record,
+                    year,
+                    month,
+                    day,
+                    resolve_day_value=resolve_day_value,
+                )
+                if day <= days_in_month
+                else None
+            )
+            status_text = (monthly or day_value) if day <= days_in_month else ""
+            _apply_sign_day_cell(
+                ws, am_row, col, symbol, status_text=status_text, year=year, month=month, day=day
+            )
+            _apply_sign_day_cell(
+                ws, pm_row, col, symbol, status_text=status_text, year=year, month=month, day=day
+            )
 
     write_sign_sheet_summary_formulas(ws, len(records), year, month)
 
@@ -541,12 +586,7 @@ def populate_monthly_sheet(
 
 def populate_situation_sheet(ws, records: Sequence[MonthlyAttendance], year: int, month: int) -> None:
     """Sheet 2 情况说明: one row per employee — same data as the web UI explanation tab."""
-    situation_rows = collect_situation_rows(
-        records,
-        year,
-        month,
-        first_anomaly_date=first_anomaly_date,
-    )
+    situation_rows = collect_situation_rows(records, year, month)
 
     row = SITUATION_DATA_START_ROW
     for item in situation_rows:
@@ -788,7 +828,7 @@ def ensure_master_template(path: Optional[Union[str, Path]] = None) -> Path:
                     or not (
                         isinstance(timestamp, str) and timestamp.startswith("报表生成时间：")
                     )
-                    or sign_header != "出勤合计"
+                    or sign_header != "出勤"
                 )
             if not needs_refresh and TEMPLATE_SHEETS[3] in wb.sheetnames:
                 overtime_ws = wb[TEMPLATE_SHEETS[3]]

@@ -8,11 +8,14 @@ The monthly summary shows descriptive sync text (e.g. ``出差05-06 08:30到05-1
 from __future__ import annotations
 
 import calendar
+import re
 from typing import Optional, Tuple
 
 from openpyxl.styles import Font, PatternFill
 
 from app.models import MonthlyAttendance
+
+SIGN_SHEET_LATE_MINUTES_RE = re.compile(r"(\d+)\s*分钟")
 
 # Legacy symbol / short codes stored before full DingTalk text sync.
 LEGACY_SYMBOL_TO_MONTHLY_TEXT = {
@@ -66,6 +69,37 @@ MONTHLY_FILL_JIABAN = PatternFill("solid", fgColor="800080")
 
 MONTHLY_FONT_ON_DARK = Font(color="FFFFFF", bold=False)
 MONTHLY_FONT_ON_LIGHT = Font(color="000000", bold=False)
+
+
+def format_sign_sheet_late_display(text: str) -> Optional[str]:
+    """
+    Format a 月度汇总 late status as a 3-line 签字 cell:
+
+        上班
+        迟到1
+        {n}分钟
+    """
+    if not text or "迟到" not in text:
+        return None
+    match = SIGN_SHEET_LATE_MINUTES_RE.search(text)
+    if match:
+        return f"上班\n迟到1\n{match.group(1)}分钟"
+    return "上班\n迟到1"
+
+
+SIGN_SHEET_LATE_FONT = Font(name="宋体", size=8, color="000000", bold=False)
+
+
+def sign_sheet_late_style() -> Tuple[PatternFill, Font]:
+    return MONTHLY_FILL_CHIDAO, SIGN_SHEET_LATE_FONT
+
+
+def sign_sheet_day_cell_value(symbol: str, status_text: str) -> Tuple[Optional[str], bool]:
+    """Return display value and whether the cell should use late (green) styling."""
+    if symbol == "迟到":
+        display = format_sign_sheet_late_display(status_text)
+        return (display or symbol, True)
+    return (symbol or None, False)
 
 
 def map_monthly_summary_text(raw: str) -> str:

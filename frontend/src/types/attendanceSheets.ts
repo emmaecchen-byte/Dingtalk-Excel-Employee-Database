@@ -9,8 +9,11 @@ export interface EmployeeSheetRow {
   days: string[];
   morning: string[];
   afternoon: string[];
+  morning_display?: string[];
+  afternoon_display?: string[];
   overtime_days: number[];
   sign_counts: Record<string, number>;
+  sign_meal_total: number;
   absent_days: number;
   work_days: number;
   total_attendance_days: number;

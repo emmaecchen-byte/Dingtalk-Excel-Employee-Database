@@ -70,8 +70,11 @@ class EmployeeSheetRow(BaseModel):
     days: List[str] = Field(default_factory=list)
     morning: List[str] = Field(default_factory=list)
     afternoon: List[str] = Field(default_factory=list)
+    morning_display: List[str] = Field(default_factory=list)
+    afternoon_display: List[str] = Field(default_factory=list)
     overtime_days: List[float] = Field(default_factory=list)
     sign_counts: dict = Field(default_factory=dict)
+    sign_meal_total: int = 0
     absent_days: int = 0
     work_days: int = 0
     total_attendance_days: int = 0

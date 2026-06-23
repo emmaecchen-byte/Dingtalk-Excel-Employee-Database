@@ -16,7 +16,11 @@ from app.excel.template_generator import SIGN_LEGEND_SYMBOLS, count_month_work_d
 # Web 签字 tab counts all legend symbols (including 婚假 ML); Excel keeps 9 COUNTIF columns.
 WEB_SIGN_COUNT_SYMBOLS = tuple(symbol for symbol, _ in SIGN_LEGEND_SYMBOLS)
 from app.models import Company, MonthlyAttendance
-from app.excel.monthly_status_display import format_monthly_summary_day_status
+from app.excel.monthly_status_display import (
+    format_monthly_summary_day_status,
+    format_sign_sheet_late_display,
+    sign_sheet_late_style,
+)
 from app.services.excel_generator import (
     first_anomaly_date,
     map_sign_sheet_status,
@@ -33,27 +37,54 @@ def _count_sign_symbols(morning_values: List[str]) -> Dict[str, int]:
     return counts
 
 
+def _sign_cell_display(
+    record: MonthlyAttendance,
+    year: int,
+    month: int,
+    day: int,
+    symbol: str,
+) -> str:
+    if symbol != "迟到":
+        return symbol
+    monthly = format_monthly_summary_day_status(
+        record,
+        year,
+        month,
+        day,
+        resolve_day_value=resolve_day_value,
+    )
+    formatted = format_sign_sheet_late_display(monthly or resolve_day_value(record, day) or "")
+    return formatted or symbol
+
+
 def _build_sign_day_rows(
     record: MonthlyAttendance,
     year: int,
     month: int,
-) -> tuple[List[str], List[str]]:
-    """Build identical 上午 / 下午 symbol rows for the web 签字 preview."""
+) -> tuple[List[str], List[str], List[str], List[str]]:
+    """Build 上午 / 下午 symbol rows and matching display rows for the web 签字 preview."""
     days_in_month = calendar.monthrange(year, month)[1]
     morning: List[str] = []
     afternoon: List[str] = []
+    morning_display: List[str] = []
+    afternoon_display: List[str] = []
 
     for day in range(1, 32):
         if day > days_in_month:
             morning.append("")
             afternoon.append("")
+            morning_display.append("")
+            afternoon_display.append("")
             continue
 
         symbol = map_sign_sheet_status(resolve_day_value(record, day))
+        display = _sign_cell_display(record, year, month, day, symbol)
         morning.append(symbol)
         afternoon.append(symbol)
+        morning_display.append(display)
+        afternoon_display.append(display)
 
-    return morning, afternoon
+    return morning, afternoon, morning_display, afternoon_display
 
 
 def _employee_sheet_row(record: MonthlyAttendance, year: int, month: int) -> dict:
@@ -74,10 +105,12 @@ def _employee_sheet_row(record: MonthlyAttendance, year: int, month: int) -> dic
         )
         days.append(display or "")
 
-    morning, afternoon = _build_sign_day_rows(record, year, month)
+    morning, afternoon, morning_display, afternoon_display = _build_sign_day_rows(record, year, month)
     sign_counts = _count_sign_symbols(morning[:days_in_month])
     present_days = sign_counts.get("√", 0)
+    business_trip_days = sign_counts.get("▼", 0)
     work_days = count_month_work_days(year, month)
+    sign_meal_total = present_days + business_trip_days
 
     overtime_days: List[float] = []
     for day in range(1, 32):
@@ -96,8 +129,11 @@ def _employee_sheet_row(record: MonthlyAttendance, year: int, month: int) -> dic
         "days": days,
         "morning": morning,
         "afternoon": afternoon,
+        "morning_display": morning_display,
+        "afternoon_display": afternoon_display,
         "overtime_days": overtime_days,
         "sign_counts": sign_counts,
+        "sign_meal_total": sign_meal_total,
         "absent_days": max(work_days - present_days, 0),
         "work_days": work_days,
         "total_attendance_days": record.total_attendance_days,
