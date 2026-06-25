@@ -47,6 +47,9 @@ export interface ExcelUploadResponse {
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error) && !error.response) {
+    return "Cannot reach the backend. Check that it is running and VITE_API_BASE_URL is set correctly.";
+  }
   if (error instanceof Error && error.message) {
     return error.message;
   }

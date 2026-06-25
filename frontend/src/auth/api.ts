@@ -1,4 +1,5 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
+import { API_BASE_URL } from "../config/apiBase";
 import {
   AccessTokenResponse,
   AuthUser,
@@ -16,7 +17,7 @@ export interface RegisterPayload {
   role: string;
 }
 
-const client = axios.create({ baseURL: "/api" });
+const client = axios.create({ baseURL: API_BASE_URL, timeout: 30_000 });
 
 let refreshPromise: Promise<string | null> | null = null;
 
@@ -67,7 +68,33 @@ export async function login(email: string, password: string): Promise<TokenRespo
 }
 
 export function getDingTalkLoginUrl(): string {
-  return "/api/auth/dingtalk";
+  return `${API_BASE_URL.replace(/\/$/, "")}/auth/dingtalk`;
+}
+
+export interface HealthResponse {
+  status: string;
+  app?: string;
+  demo_mode?: boolean;
+  dingtalk_oauth_enabled?: boolean;
+  dingtalk_api_configured?: boolean;
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  const { data } = await client.get<HealthResponse>("/health");
+  return data;
+}
+
+export function getConnectionErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    if (!error.response) {
+      return "Cannot reach the backend. Confirm it is running on port 8000 and VITE_API_BASE_URL is correct.";
+    }
+    return `Backend returned ${error.response.status}.`;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "Cannot reach the backend.";
 }
 
 export async function completeDingTalkLogin(

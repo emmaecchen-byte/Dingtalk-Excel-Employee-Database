@@ -14,6 +14,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import RuleConfigPage from "./pages/RuleConfigPage";
 import WebhooksPage from "./pages/WebhooksPage";
+import BackendConnectionStatus from "./components/BackendConnectionStatus";
 import { queryClient } from "./lib/queryClient";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
         window.location.reload();
       }}
     >
+      <BackendConnectionStatus />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/dingtalk/callback" element={<DingTalkCallbackPage />} />
